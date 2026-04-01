@@ -1220,18 +1220,19 @@ function tactical_motifs(board, board_after, move) {
 			value: piece_value(piece)
 		} : null;
 	}).filter(Boolean).sort((a, b) => b.value - a.value);
+	let non_king_targets = attacked_targets.filter(target => target.piece.toLowerCase() !== "k");
 	let enemy_king = king_square(board_after, enemy);
 	let king_attacked = enemy_king ? piece_controls_square(board_after, landing, enemy_king) : false;
 
-	if ((king_attacked && attacked_targets.length >= 1) || attacked_targets.length >= 2) {
-		if (king_attacked && attacked_targets.length >= 1) {
+	if ((king_attacked && non_king_targets.length >= 1) || non_king_targets.length >= 2) {
+		if (king_attacked && non_king_targets.length >= 1) {
 			add_motif("fork", "It creates a fork: the king and {piece} are both under immediate pressure.", {
-				piece: piece_name(attacked_targets[0].piece)
+				piece: piece_name(non_king_targets[0].piece)
 			}, 4.5, "fork");
-		} else if (attacked_targets.length >= 2 && attacked_targets[0].value + attacked_targets[1].value >= 6) {
+		} else if (non_king_targets.length >= 2 && non_king_targets[0].value + non_king_targets[1].value >= 6) {
 			add_motif("fork", "It creates a double attack on the {piece1} and {piece2}, so the opponent may not be able to cover both.", {
-				piece1: piece_name(attacked_targets[0].piece),
-				piece2: piece_name(attacked_targets[1].piece)
+				piece1: piece_name(non_king_targets[0].piece),
+				piece2: piece_name(non_king_targets[1].piece)
 			}, 4.0, "fork");
 		}
 	}

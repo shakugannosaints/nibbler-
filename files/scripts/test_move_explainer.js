@@ -314,6 +314,15 @@ let cases = [
 		min_coach_notes: 1,
 		min_why_not: 1
 	},
+	{
+		name: "no_false_fork_on_check",
+		fen: "6k1/5p2/R5p1/6Rp/7r/5P2/1r4P1/6K1 b - - 1 41",
+		nodeMove: null,
+		info: make_info("b2b1", ["b2b1", "g1h2", "b1h1"], 999, 1),
+		best: make_info("b2b1", ["b2b1", "g1h2", "b1h1"], 999, 1),
+		second: null,
+		forbidden_tags: ["fork"]
+	},
 ];
 
 function assert_no_placeholders(s, label) {
@@ -351,6 +360,12 @@ for (let language of ["English", "\u7b80\u4f53\u4e2d\u6587", "\u7e41\u9ad4\u4e2d
 		for (let tag of sample.expected_tags || []) {
 			if (!explanation.raw_tags.includes(tag)) {
 				throw new Error(`Missing expected tag ${tag} for ${sample.name}`);
+			}
+		}
+
+		for (let tag of sample.forbidden_tags || []) {
+			if (explanation.raw_tags.includes(tag)) {
+				throw new Error(`Unexpected tag ${tag} for ${sample.name}`);
 			}
 		}
 

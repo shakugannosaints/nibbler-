@@ -1,3 +1,11 @@
+# Nibbler-
+
+##这个项目做了什么
+
+给 Nibbler 做了一个读取 Stockfish 输出，并且对分支之间进行对比，然后进行自然语言解释的功能。这样一来，引擎的输出就可以直接被作为人类可理解的信息进行阅读，起到更好的学习作用。
+
+依赖：与原项目相同。不过你可能必须使用 Stockfish 而非 LC0 才能获取有效的信息，因为它们输出头不同。
+
 # Nibbler
 
 Nibbler is a real-time analysis GUI for [Leela Chess Zero](http://lczero.org/play/quickstart/) (Lc0), which runs Leela in the background and constantly displays opinions about the current position. You can also compel the engine to evaluate one or more specific moves. Nibbler is loosely inspired by [Lizzie](https://github.com/featurecat/lizzie) and [Sabaki](https://github.com/SabakiHQ/Sabaki).

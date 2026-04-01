@@ -94,6 +94,7 @@ exports.defaults = {
 	"infobox_stats_newline": false,
 	"infobox_pv_move_numbers": false,
 	"show_explanation_panel": true,
+	"show_learning_feedback": false,
 	"hover_eval_enabled": true,
 	"hover_eval_delay_ms": 220,
 	"hover_eval_movetime_ms": 250,

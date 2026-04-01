@@ -698,6 +698,366 @@ function space_score(board, colour) {
 	return score;
 }
 
+function total_material(board) {
+	let total = 0;
+
+	for (let x = 0; x < 8; x++) {
+		for (let y = 0; y < 8; y++) {
+			let piece = board.state[x][y];
+			if (!piece || piece === "K" || piece === "k") {
+				continue;
+			}
+
+			total += piece_value(piece);
+		}
+	}
+
+	return total;
+}
+
+function piece_points(board, colour, pieces) {
+	let ret = [];
+
+	for (let x = 0; x < 8; x++) {
+		for (let y = 0; y < 8; y++) {
+			let piece = board.state[x][y];
+			if (!piece || piece_colour(piece) !== colour || !pieces.includes(piece)) {
+				continue;
+			}
+
+			ret.push({x, y, s: point_to_square(x, y)});
+		}
+	}
+
+	return ret;
+}
+
+function pawn_points(board, colour) {
+	return piece_points(board, colour, colour === "w" ? ["P"] : ["p"]);
+}
+
+function square_colour_index(point) {
+	return (point.x + point.y) % 2;
+}
+
+function pawn_attacks_square(board, colour, square) {
+	let point = typeof square === "string" ? square_to_point(square) : square;
+
+	if (!point) {
+		return false;
+	}
+
+	let pawn = colour === "w" ? "P" : "p";
+	let source_y = colour === "w" ? point.y + 1 : point.y - 1;
+
+	for (let dx of [-1, 1]) {
+		let source_x = point.x + dx;
+
+		if (!in_bounds(source_x, source_y)) {
+			continue;
+		}
+
+		if (board.state[source_x][source_y] === pawn) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+function enemy_pawn_can_challenge_square(board, colour, square) {
+	let point = typeof square === "string" ? square_to_point(square) : square;
+
+	if (!point) {
+		return false;
+	}
+
+	let enemy = opposite_colour(colour);
+	let enemy_pawn = enemy === "w" ? "P" : "p";
+
+	for (let dx of [-1, 1]) {
+		let file = point.x + dx;
+
+		if (file < 0 || file > 7) {
+			continue;
+		}
+
+		for (let y = 0; y < 8; y++) {
+			if (board.state[file][y] !== enemy_pawn) {
+				continue;
+			}
+
+			if ((enemy === "w" && y > point.y) || (enemy === "b" && y < point.y)) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+function is_enemy_half_square(square, colour) {
+	return colour === "w" ? square.y <= 3 : square.y >= 4;
+}
+
+function is_passed_pawn_at(board, square, colour) {
+	let point = typeof square === "string" ? square_to_point(square) : square;
+
+	if (!point) {
+		return false;
+	}
+
+	let enemy_pawn = colour === "w" ? "p" : "P";
+
+	for (let x = Math.max(0, point.x - 1); x <= Math.min(7, point.x + 1); x++) {
+		for (let y = 0; y < 8; y++) {
+			if (board.state[x][y] !== enemy_pawn) {
+				continue;
+			}
+
+			if ((colour === "w" && y <= point.y) || (colour === "b" && y >= point.y)) {
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+function is_backward_pawn(board, square, colour, pawns) {
+	let point = typeof square === "string" ? square_to_point(square) : square;
+
+	if (!point) {
+		return false;
+	}
+
+	let step = colour === "w" ? -1 : 1;
+	let front = {x: point.x, y: point.y + step, s: point_to_square(point.x, point.y + step)};
+
+	if (!in_bounds(front.x, front.y)) {
+		return false;
+	}
+
+	let has_adjacent_pawn_same_or_behind = pawns.some(other =>
+		Math.abs(other.x - point.x) === 1 &&
+		(colour === "w" ? other.y >= point.y : other.y <= point.y)
+	);
+	let has_adjacent_pawn_ahead = pawns.some(other =>
+		Math.abs(other.x - point.x) === 1 &&
+		(colour === "w" ? other.y < point.y : other.y > point.y)
+	);
+
+	if (has_adjacent_pawn_same_or_behind || !has_adjacent_pawn_ahead) {
+		return false;
+	}
+
+	return pawn_attacks_square(board, opposite_colour(colour), front);
+}
+
+function pawn_structure_components(board, colour) {
+	let pawns = pawn_points(board, colour);
+	let files = new Array(8).fill(0);
+	let isolated = 0;
+	let doubled = 0;
+	let backward = 0;
+	let chain = 0;
+	let passed = 0;
+	let weak_set = new Set();
+
+	for (let pawn of pawns) {
+		files[pawn.x]++;
+	}
+
+	for (let count of files) {
+		if (count > 1) {
+			doubled += count - 1;
+		}
+	}
+
+	for (let pawn of pawns) {
+		let has_adjacent_file_pawn = pawns.some(other => Math.abs(other.x - pawn.x) === 1);
+		let supported = pawn_attacks_square(board, colour, pawn);
+
+		if (!has_adjacent_file_pawn) {
+			isolated++;
+			weak_set.add(pawn.s);
+		}
+
+		if (supported) {
+			chain++;
+		}
+
+		if (is_passed_pawn_at(board, pawn, colour)) {
+			passed++;
+		}
+
+		if (is_backward_pawn(board, pawn, colour, pawns)) {
+			backward++;
+			weak_set.add(pawn.s);
+		}
+
+		if (is_enemy_half_square(pawn, colour) && !supported) {
+			weak_set.add(pawn.s);
+		}
+	}
+
+	let weak = weak_set.size;
+	let score = chain * 0.4 + passed * 0.8 - isolated * 0.9 - doubled * 0.8 - backward * 0.6 - weak * 0.35;
+
+	return {
+		score,
+		isolated,
+		doubled,
+		backward,
+		chain,
+		weak,
+		passed
+	};
+}
+
+function knight_outpost_components(board, colour) {
+	let knights = piece_points(board, colour, colour === "w" ? ["N"] : ["n"]);
+	let score = 0;
+	let outpost_score = 0;
+	let strong = 0;
+	let weak = 0;
+	let best_outpost = null;
+	let best_outpost_score = -1000;
+
+	for (let knight of knights) {
+		let on_rim = knight.x === 0 || knight.x === 7;
+		let supported = pawn_attacks_square(board, colour, knight);
+		let outpost = is_enemy_half_square(knight, colour) && supported && !enemy_pawn_can_challenge_square(board, colour, knight);
+		let one = 0;
+
+		if (central_space.has(knight.s)) {
+			one += 1;
+		}
+		if (is_enemy_half_square(knight, colour)) {
+			one += 0.5;
+		}
+		if (supported) {
+			one += 0.4;
+		}
+		if (outpost) {
+			one += 1.5;
+			outpost_score += 2;
+			strong++;
+			if (one > best_outpost_score) {
+				best_outpost_score = one;
+				best_outpost = knight.s;
+			}
+		}
+		if (on_rim) {
+			one -= 1;
+			weak++;
+		}
+
+		score += one;
+	}
+
+	return {
+		score,
+		outpost_score,
+		strong,
+		weak,
+		best_outpost
+	};
+}
+
+function bishop_mobility(board, square) {
+	let point = typeof square === "string" ? square_to_point(square) : square;
+
+	if (!point) {
+		return 0;
+	}
+
+	let colour = board.colour(point);
+	let total = 0;
+
+	for (let [dx, dy] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+		for (let x = point.x + dx, y = point.y + dy; in_bounds(x, y); x += dx, y += dy) {
+			let piece = board.state[x][y];
+
+			if (piece === "") {
+				total++;
+				continue;
+			}
+
+			if (piece_colour(piece) !== colour) {
+				total++;
+			}
+			break;
+		}
+	}
+
+	return total;
+}
+
+function bishop_quality_components(board, colour) {
+	let bishops = piece_points(board, colour, colour === "w" ? ["B"] : ["b"]);
+	let pawns = pawn_points(board, colour);
+	let score = 0;
+	let good = 0;
+	let bad = 0;
+
+	for (let bishop of bishops) {
+		let same_colour_pawns = pawns.filter(pawn => square_colour_index(pawn) === square_colour_index(bishop)).length;
+		let opposite_colour_pawns = pawns.length - same_colour_pawns;
+		let mobility = bishop_mobility(board, bishop);
+		let one = mobility * 0.18 + (opposite_colour_pawns - same_colour_pawns) * 0.3;
+
+		if (mobility >= 6 && same_colour_pawns <= opposite_colour_pawns) {
+			one += 0.5;
+			good++;
+		}
+
+		if (same_colour_pawns >= opposite_colour_pawns + 2 && mobility <= 4) {
+			one -= 0.7;
+			bad++;
+		}
+
+		score += one;
+	}
+
+	return {
+		score,
+		good,
+		bad
+	};
+}
+
+function endgame_comfort_components(board, colour, pawn_structure, bishop_quality, knight_quality) {
+	let king = king_square(board, colour);
+	let king_activity = king ? Math.max(0, 4 - center_distance(king)) : 0;
+	let score =
+		pawn_structure.score +
+		pawn_structure.passed * 0.7 +
+		bishop_quality.score * 0.35 +
+		knight_quality.score * 0.25 +
+		(is_endgame(board) ? king_activity * 0.8 : king_activity * 0.25);
+
+	return {
+		score,
+		king_activity
+	};
+}
+
+function strategic_profile(board, colour) {
+	let pawn_structure = pawn_structure_components(board, colour);
+	let knight = knight_outpost_components(board, colour);
+	let bishop = bishop_quality_components(board, colour);
+	let endgame = endgame_comfort_components(board, colour, pawn_structure, bishop, knight);
+
+	return {
+		pawn_structure,
+		knight,
+		bishop,
+		endgame,
+		minor_pieces: bishop.score + knight.score
+	};
+}
+
 function line_snapshot(board, info, max_plies = 6) {
 	let moves = Array.isArray(info && info.pv) && info.pv.length > 0 ? info.pv : [info.move];
 	let temp = board;
@@ -761,6 +1121,8 @@ function side_follow_up(snapshot) {
 function line_features(board, info) {
 	let mover = board.active;
 	let snapshot = line_snapshot(board, info);
+	let own_strategic = strategic_profile(snapshot.board, mover);
+	let enemy_strategic = strategic_profile(snapshot.board, opposite_colour(mover));
 
 	return {
 		snapshot,
@@ -771,7 +1133,16 @@ function line_features(board, info) {
 		space: space_score(snapshot.board, mover),
 		castled: is_castled(snapshot.board, mover),
 		castling_rights: has_castling_rights(snapshot.board, mover),
-		follow_up: side_follow_up(snapshot)
+		follow_up: side_follow_up(snapshot),
+		pawn_structure: own_strategic.pawn_structure.score - enemy_strategic.pawn_structure.score,
+		squares: own_strategic.knight.outpost_score - enemy_strategic.knight.outpost_score,
+		minor_pieces: own_strategic.minor_pieces - enemy_strategic.minor_pieces,
+		endgame_comfort: own_strategic.endgame.score - enemy_strategic.endgame.score,
+		remaining_material: total_material(snapshot.board),
+		strategic: {
+			own: own_strategic,
+			enemy: enemy_strategic
+		}
 	};
 }
 
@@ -825,6 +1196,12 @@ function coach_metrics_for({board, currentInfo, targetInfo, currentPrimary, targ
 	let king_gap = current.king_safety - target.king_safety;
 	let development_gap = current.development - target.development;
 	let center_space_gap = (current.center + current.space) - (target.center + target.space);
+	let pawn_structure_gap = current.pawn_structure - target.pawn_structure;
+	let square_gap = current.squares - target.squares;
+	let minor_piece_gap = current.minor_pieces - target.minor_pieces;
+	let endgame_gap = current.endgame_comfort - target.endgame_comfort;
+	let current_outpost = current.strategic.own.knight.best_outpost;
+	let target_outpost = target.strategic.own.knight.best_outpost;
 
 	if (material_gap >= 1) {
 		push_coach_metric(metrics, "Material", "better than {other_move} by about {delta} after the next few PV moves.", {
@@ -872,6 +1249,52 @@ function coach_metrics_for({board, currentInfo, targetInfo, currentPrimary, targ
 		push_coach_metric(metrics, "Center / space", "concedes some center and space edge to {other_move}.", {other_move});
 	} else {
 		push_coach_metric(metrics, "Center / space", "about the same as {other_move}.", {other_move});
+	}
+
+	if (pawn_structure_gap >= 1.1) {
+		push_coach_metric(metrics, "Pawn structure", "healthier than {other_move}: fewer isolated, doubled, or backward pawns, and the chain stays more connected.", {other_move});
+	} else if (pawn_structure_gap <= -1.1) {
+		push_coach_metric(metrics, "Pawn structure", "looser than {other_move}: more isolated, doubled, or backward pawns to look after.", {other_move});
+	} else {
+		push_coach_metric(metrics, "Pawn structure", "about as healthy as {other_move}.", {other_move});
+	}
+
+	if (square_gap >= 1.5 && current_outpost) {
+		push_coach_metric(metrics, "Squares", "gets a durable outpost on {square}, which {other_move} does not match.", {
+			other_move,
+			square: current_outpost
+		});
+	} else if (square_gap <= -1.5 && target_outpost) {
+		push_coach_metric(metrics, "Squares", "{other_move} gets the more durable outpost on {square}.", {
+			other_move,
+			square: target_outpost
+		});
+	} else if (square_gap >= 1) {
+		push_coach_metric(metrics, "Squares", "gets the better weak-square grip and outpost potential than {other_move}.", {other_move});
+	} else if (square_gap <= -1) {
+		push_coach_metric(metrics, "Squares", "concedes the better weak-square grip and outpost potential to {other_move}.", {other_move});
+	} else {
+		push_coach_metric(metrics, "Squares", "about the same weak-square grip as {other_move}.", {other_move});
+	}
+
+	if (minor_piece_gap >= 1.4) {
+		push_coach_metric(metrics, "Minor pieces", "coordinates the bishops and knights better than {other_move}.", {other_move});
+	} else if (minor_piece_gap <= -1.4) {
+		push_coach_metric(metrics, "Minor pieces", "leaves the bishops and knights less harmonious than {other_move}.", {other_move});
+	} else {
+		push_coach_metric(metrics, "Minor pieces", "about as harmonious as {other_move}.", {other_move});
+	}
+
+	if (endgame_gap >= 1.2 && current.remaining_material <= target.remaining_material) {
+		push_coach_metric(metrics, "Endgame", "if pieces come off, the endgame looks more comfortable than after {other_move}.", {other_move});
+	} else if (endgame_gap <= -1.2 && current.remaining_material <= target.remaining_material) {
+		push_coach_metric(metrics, "Endgame", "if pieces come off, the endgame looks less comfortable than after {other_move}.", {other_move});
+	} else if (endgame_gap >= 1.2) {
+		push_coach_metric(metrics, "Endgame", "endgame prospects are better than after {other_move}.", {other_move});
+	} else if (endgame_gap <= -1.2) {
+		push_coach_metric(metrics, "Endgame", "endgame prospects are less comfortable than after {other_move}.", {other_move});
+	} else {
+		push_coach_metric(metrics, "Endgame", "endgame prospects are about as comfortable as after {other_move}.", {other_move});
 	}
 
 	if (current.follow_up && target.follow_up) {
@@ -922,6 +1345,10 @@ function why_not_reasons_for({board, currentInfo, targetInfo, currentPrimary, ta
 	let king_gap = current.king_safety - target.king_safety;
 	let development_gap = current.development - target.development;
 	let center_space_gap = (current.center + current.space) - (target.center + target.space);
+	let pawn_structure_gap = current.pawn_structure - target.pawn_structure;
+	let square_gap = current.squares - target.squares;
+	let minor_piece_gap = current.minor_pieces - target.minor_pieces;
+	let endgame_gap = current.endgame_comfort - target.endgame_comfort;
 
 	if (current_better && material_gap >= 1) {
 		push_why_not_reason(reasons, seen, "Tactics", "The tactical edge is material: after the next few PV moves, this line comes out about {delta} better than {other_move}.", {
@@ -986,6 +1413,46 @@ function why_not_reasons_for({board, currentInfo, targetInfo, currentPrimary, ta
 		});
 	}
 
+	if (current_better && pawn_structure_gap >= 1.1) {
+		push_why_not_reason(reasons, seen, "Pawn structure", "Long-term, the alternative leaves the pawn structure looser: more isolated, doubled, or backward pawns than this line.", {
+			other_move
+		});
+	} else if (!current_better && pawn_structure_gap <= -1.1) {
+		push_why_not_reason(reasons, seen, "Pawn structure", "Long-term, the pawn structure is one problem: {other_move} keeps fewer isolated, doubled, or backward pawns.", {
+			other_move
+		});
+	}
+
+	if (current_better && square_gap >= 1.5) {
+		push_why_not_reason(reasons, seen, "Squares", "Square-wise, the alternative falls short because it does not get the same durable outpost or weak-square grip.", {
+			other_move
+		});
+	} else if (!current_better && square_gap <= -1.5) {
+		push_why_not_reason(reasons, seen, "Squares", "Square-wise, this move falls short because {other_move} gets the more durable outpost or weak-square grip.", {
+			other_move
+		});
+	}
+
+	if (current_better && minor_piece_gap >= 1.4) {
+		push_why_not_reason(reasons, seen, "Minor pieces", "The alternative falls short because the bishops and knights do not fit the structure as well.", {
+			other_move
+		});
+	} else if (!current_better && minor_piece_gap <= -1.4) {
+		push_why_not_reason(reasons, seen, "Minor pieces", "The minor-piece issue is real: {other_move} keeps the bishops and knights working together more naturally.", {
+			other_move
+		});
+	}
+
+	if (current_better && endgame_gap >= 1.2 && current.remaining_material <= target.remaining_material) {
+		push_why_not_reason(reasons, seen, "Endgame", "The alternative falls short because, once pieces come off, the resulting endgame is less comfortable.", {
+			other_move
+		});
+	} else if (!current_better && endgame_gap <= -1.2 && current.remaining_material <= target.remaining_material) {
+		push_why_not_reason(reasons, seen, "Endgame", "The endgame direction is one issue: if pieces come off, {other_move} leaves the more comfortable ending.", {
+			other_move
+		});
+	}
+
 	if (replyPreview) {
 		if (!current_better && replyPreview.note_args && replyPreview.note_args.reply_move && replyPreview.note_args.pv) {
 			push_why_not_reason(reasons, seen, "Plan", "The plan problem is that after {reply_move}, the opponent can often continue with {pv}.", {
@@ -1037,6 +1504,12 @@ function coach_notes_for({board, currentInfo, targetInfo, currentPrimary, target
 	let king_gap = current.king_safety - target.king_safety;
 	let development_gap = current.development - target.development;
 	let center_space_gap = (current.center + current.space) - (target.center + target.space);
+	let pawn_structure_gap = current.pawn_structure - target.pawn_structure;
+	let square_gap = current.squares - target.squares;
+	let minor_piece_gap = current.minor_pieces - target.minor_pieces;
+	let endgame_gap = current.endgame_comfort - target.endgame_comfort;
+	let current_outpost = current.strategic.own.knight.best_outpost;
+	let target_outpost = target.strategic.own.knight.best_outpost;
 
 	if (current_better && material_gap >= 1) {
 		push_coach_note(notes, seen, "Material is one of the differences: this line comes out about {delta} better than {other_move} after the first few PV moves.", {
@@ -1078,6 +1551,43 @@ function coach_notes_for({board, currentInfo, targetInfo, currentPrimary, target
 		push_coach_note(notes, seen, "This line fights harder for the center and claims more space than {other_move}.", {other_move});
 	} else if (!current_better && center_space_gap <= -2) {
 		push_coach_note(notes, seen, "{other_move} fights harder for the center and claims more space.", {other_move});
+	}
+
+	if (current_better && pawn_structure_gap >= 1.1) {
+		push_coach_note(notes, seen, "Long-term, the pawn structure stays healthier than after {other_move}.", {other_move});
+	} else if (!current_better && pawn_structure_gap <= -1.1) {
+		push_coach_note(notes, seen, "Long-term, {other_move} keeps the pawn structure healthier.", {other_move});
+	}
+
+	if (current_better && square_gap >= 1.5 && current_outpost) {
+		push_coach_note(notes, seen, "Square-wise, this line gets a durable outpost on {square}.", {square: current_outpost});
+	} else if (!current_better && square_gap <= -1.5 && target_outpost) {
+		push_coach_note(notes, seen, "Square-wise, {other_move} gets the more durable outpost on {square}.", {
+			other_move,
+			square: target_outpost
+		});
+	}
+
+	if (current_better && current.strategic.own.bishop.good > target.strategic.own.bishop.good) {
+		push_coach_note(notes, seen, "The bishop fits the pawn chain better here than after {other_move}.", {other_move});
+	} else if (!current_better && current.strategic.own.bishop.bad > target.strategic.own.bishop.bad) {
+		push_coach_note(notes, seen, "The bishop is less happy in this structure; {other_move} gives it the cleaner role.", {other_move});
+	}
+
+	if (notes.length < 3) {
+		if (current_better && minor_piece_gap >= 1.4) {
+			push_coach_note(notes, seen, "The minor pieces fit the structure better here than after {other_move}.", {other_move});
+		} else if (!current_better && minor_piece_gap <= -1.4) {
+			push_coach_note(notes, seen, "The minor pieces fit the structure better after {other_move}.", {other_move});
+		}
+	}
+
+	if (notes.length < 3) {
+		if (current_better && endgame_gap >= 1.2) {
+			push_coach_note(notes, seen, "If the game simplifies, this line points to a more comfortable endgame.", null);
+		} else if (!current_better && endgame_gap <= -1.2) {
+			push_coach_note(notes, seen, "If the game simplifies, {other_move} points to a more comfortable endgame.", {other_move});
+		}
 	}
 
 	if (notes.length < 3) {
@@ -1152,7 +1662,7 @@ function reply_preview_for({board, info, currentPrimary, currentRank, touched}) 
 
 	if (currentRank === 1) {
 		if (later_plan) {
-			note_key = "If the line continues, the opponent often follows with {pv}, but the engine still prefers your move.";
+			note_key = "If the line continues, the opponent often follows with {pv}, so that is the main resistance to your plan.";
 			note_args = {pv: later_plan};
 		} else {
 			note_key = "That is the best resistance the engine has found after your move.";
@@ -1318,6 +1828,15 @@ function pv_hint_key_for(primary, has_pv) {
 	case "open_file":
 	case "half_open_file":
 		return "The engine keeps pressing on the file with {pv}.";
+	case "pawn_structure":
+		return "The continuation keeps the structure healthy with {pv}.";
+	case "outpost":
+		return "The continuation keeps using the outpost with {pv}.";
+	case "bishop_quality":
+	case "knight_quality":
+		return "The continuation keeps improving the minor pieces with {pv}.";
+	case "endgame_direction":
+		return "The continuation heads for a more comfortable endgame with {pv}.";
 	case "check":
 	case "mate":
 	case "capture":
@@ -1354,6 +1873,11 @@ function idea_phrase_key(primary) {
 	case "king_activity": return "activate the king";
 	case "open_file":
 	case "half_open_file": return "put the rook on an active file";
+	case "pawn_structure": return "improve the pawn structure";
+	case "outpost": return "claim a durable outpost";
+	case "bishop_quality": return "improve the bishop against the pawn chain";
+	case "knight_quality": return "improve the knight's long-term square";
+	case "endgame_direction": return "steer toward a comfortable endgame";
 	case "defense":
 	case "escape_check": return "stabilize the position";
 	case "simplify": return "simplify into a cleaner position";
@@ -1683,6 +2207,12 @@ function explainMove({node, info, bestInfo, secondInfo, infoList}, internal = fa
 	let themes = [];
 	let raw_tags = [];
 	let seen = new Set();
+	let mover = board.active;
+	let moved = moved_piece(board, info.move);
+	let landing = landing_square(board, info.move);
+	let before_profile = strategic_profile(board, mover);
+	let immediate_after_profile = strategic_profile(board_after, mover);
+	let current_line = line_features(board, info);
 
 	if (mate) {
 		push_theme(themes, raw_tags, seen, "It starts a forcing mating sequence.", null, "mate");
@@ -1750,8 +2280,24 @@ function explainMove({node, info, bestInfo, secondInfo, infoList}, internal = fa
 	if (is_passed_pawn(board_after, info.move)) {
 		push_theme(themes, raw_tags, seen, "It advances a passed pawn and asks endgame questions.", null, "passed_pawn");
 	}
+	if ((moved === "P" || moved === "p" || capture) && immediate_after_profile.pawn_structure.score >= before_profile.pawn_structure.score + 0.8) {
+		push_theme(themes, raw_tags, seen, "It secures a healthier pawn structure, with fewer long-term pawn weaknesses.", null, "pawn_structure");
+	}
+	if ((moved === "N" || moved === "n") && landing && immediate_after_profile.knight.best_outpost === landing.s && immediate_after_profile.knight.outpost_score > before_profile.knight.outpost_score) {
+		push_theme(themes, raw_tags, seen, "It plants a knight on a durable outpost at {square}, using a weak square the pawns cannot easily challenge.", {
+			square: landing.s
+		}, "outpost");
+	} else if ((moved === "N" || moved === "n") && immediate_after_profile.knight.score >= before_profile.knight.score + 0.8) {
+		push_theme(themes, raw_tags, seen, "It improves the knight's long-term square and makes it harder to challenge.", null, "knight_quality");
+	}
+	if ((moved === "B" || moved === "b" || moved === "P" || moved === "p") && immediate_after_profile.bishop.score >= before_profile.bishop.score + 0.4) {
+		push_theme(themes, raw_tags, seen, "It improves the bishop relative to the pawn chain, so the minor pieces fit the structure better.", null, "bishop_quality");
+	}
 	if (simplifies_ahead(best_value, capture)) {
 		push_theme(themes, raw_tags, seen, "With the better position, it simplifies into a cleaner game.", null, "simplify");
+	}
+	if ((capture || current_line.remaining_material <= total_material(board) - 2 || is_endgame(current_line.snapshot.board)) && current_line.endgame_comfort >= 1.2) {
+		push_theme(themes, raw_tags, seen, "The resulting structure points toward a more comfortable endgame if pieces come off.", null, "endgame_direction");
 	}
 	if (best_value <= -120 && (rank === 1 || (delta_cp !== null && delta_cp <= 40) || board.king_in_check())) {
 		push_theme(themes, raw_tags, seen, "It is a stubborn defensive resource that keeps the game going.", null, "defense");
@@ -1913,29 +2459,7 @@ function interpolate(template, args) {
 }
 
 function renderExplanation(explanation, translate_fn) {
-	let translate = (key, args) => {
-		let translated_key = translate_fn(key) || key;
-		let translated_args = null;
-		let should_translate_args = translated_key !== key;
-
-		if (args) {
-			translated_args = Object.create(null);
-			for (let [name, value] of Object.entries(args)) {
-				if (typeof value === "string") {
-					if (should_translate_args) {
-						let translated_value = translate_fn(value);
-						translated_args[name] = translated_value || value;
-					} else {
-						translated_args[name] = value;
-					}
-				} else {
-					translated_args[name] = value;
-				}
-			}
-		}
-
-		return interpolate(translated_key, translated_args);
-	};
+	let translate = make_translate_helper(translate_fn);
 
 	return {
 		title: translate("Move explanation"),
@@ -1971,7 +2495,154 @@ function renderExplanation(explanation, translate_fn) {
 	};
 }
 
+function make_translate_helper(translate_fn) {
+	return (key, args) => {
+		let translated_key = translate_fn(key) || key;
+		let translated_args = null;
+		let should_translate_args = translated_key !== key;
+
+		if (args) {
+			translated_args = Object.create(null);
+			for (let [name, value] of Object.entries(args)) {
+				if (typeof value === "string") {
+					if (should_translate_args) {
+						let translated_value = translate_fn(value);
+						translated_args[name] = translated_value || value;
+					} else {
+						translated_args[name] = value;
+					}
+				} else {
+					translated_args[name] = value;
+				}
+			}
+		}
+
+		return interpolate(translated_key, translated_args);
+	};
+}
+
+function learning_status_for_explanation(explanation) {
+	let tags = new Set(explanation.raw_tags || []);
+	let delta = typeof explanation.delta_from_best === "number" ? explanation.delta_from_best : null;
+	let positive_tags = ["development", "center_pawn", "castle", "save_piece", "threat", "open_file", "half_open_file", "passed_pawn", "king_activity", "simplify", "defense", "pawn_structure", "outpost", "bishop_quality", "knight_quality", "endgame_direction"];
+	let severe_tags = ["early_king", "queen_early"];
+
+	if (explanation.touched) {
+		if (explanation.rank === 1 || (delta !== null && delta <= 35)) {
+			return {key: "Acceptable", tone: "good"};
+		}
+		if (severe_tags.some(tag => tags.has(tag)) || (delta !== null && delta >= 120)) {
+			return {key: "Clear concession", tone: "bad"};
+		}
+		return {key: "Dubious", tone: "warning"};
+	}
+
+	if (severe_tags.some(tag => tags.has(tag))) {
+		return {key: "Clear concession", tone: "bad"};
+	}
+	if (positive_tags.some(tag => tags.has(tag))) {
+		return {key: "Acceptable", tone: "good"};
+	}
+	return {key: "Dubious", tone: "warning"};
+}
+
+function buildLearningFeedback({node, info, bestInfo, secondInfo, infoList}) {
+	if (!node || !info) {
+		return null;
+	}
+
+	let explanation = explainMove({
+		node,
+		info,
+		bestInfo,
+		secondInfo,
+		infoList
+	});
+
+	let status = learning_status_for_explanation(explanation);
+	let best_explanation = null;
+
+	if (bestInfo && bestInfo.move && bestInfo.move !== explanation.move) {
+		best_explanation = explainMove({
+			node,
+			info: bestInfo,
+			bestInfo,
+			secondInfo,
+			infoList
+		}, true);
+	}
+
+	let issue_label_key = (explanation.why_not_reason_text_keys || []).length > 0 ? "Main issue" : "Main idea";
+	let issue_text_key = (explanation.why_not_reason_text_keys || [])[0] || explanation.pv_hint_key;
+	let issue_args = (explanation.why_not_reason_args || [])[0] || explanation.pv_hint_args || null;
+	let better_text_key = null;
+	let better_args = null;
+
+	if (best_explanation && best_explanation.move !== explanation.move) {
+		better_text_key = "A cleaner plan was {best_move}: first {best_idea}.";
+		better_args = {
+			best_move: best_explanation.nice_move,
+			best_idea: idea_phrase_key(best_explanation.primary)
+		};
+	}
+
+	let reply_text_key = explanation.reply_summary_key || explanation.reply_note_key || null;
+	let reply_args = explanation.reply_summary_key ? explanation.reply_summary_args : explanation.reply_note_args;
+	let note_text_key = explanation.touched ? null : "The engine has not searched this move deeply yet, so this is a first-pass judgement.";
+
+	return {
+		signature: `${node.id}|${explanation.move}|${status.key}|${status.tone}|${explanation.touched ? 1 : 0}|${explanation.delta_from_best === null ? "?" : explanation.delta_from_best}|${(explanation.raw_tags || []).join(",")}`,
+		move: explanation.move,
+		nice_move: explanation.nice_move,
+		title_key: "Learning feedback",
+		move_label_key: "Your move",
+		status_key: status.key,
+		status_tone: status.tone,
+		summary_key: explanation.summary_key,
+		summary_args: explanation.summary_args,
+		issue_label_key,
+		issue_text_key,
+		issue_args,
+		better_label_key: better_text_key ? "Better idea" : null,
+		better_text_key,
+		better_args,
+		reply_label_key: reply_text_key ? "Likely reply" : null,
+		reply_text_key,
+		reply_args,
+		note_label_key: note_text_key ? "Search note" : null,
+		note_text_key,
+		note_args: null
+	};
+}
+
+function renderLearningFeedback(feedback, translate_fn) {
+	if (!feedback) {
+		return null;
+	}
+
+	let translate = make_translate_helper(translate_fn);
+
+	return {
+		title: translate(feedback.title_key),
+		move_label: translate(feedback.move_label_key),
+		move: feedback.nice_move,
+		status: translate(feedback.status_key),
+		status_tone: feedback.status_tone || "warning",
+		summary: translate(feedback.summary_key, feedback.summary_args),
+		issue_label: feedback.issue_label_key ? translate(feedback.issue_label_key) : "",
+		issue_text: feedback.issue_text_key ? translate(feedback.issue_text_key, feedback.issue_args) : "",
+		better_label: feedback.better_label_key ? translate(feedback.better_label_key) : "",
+		better_text: feedback.better_text_key ? translate(feedback.better_text_key, feedback.better_args) : "",
+		reply_label: feedback.reply_label_key ? translate(feedback.reply_label_key) : "",
+		reply_text: feedback.reply_text_key ? translate(feedback.reply_text_key, feedback.reply_args) : "",
+		note_label: feedback.note_label_key ? translate(feedback.note_label_key) : "",
+		note_text: feedback.note_text_key ? translate(feedback.note_text_key, feedback.note_args) : ""
+	};
+}
+
 module.exports = {
 	explainMove,
 	renderExplanation,
+	buildLearningFeedback,
+	renderLearningFeedback,
 };

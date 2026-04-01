@@ -92,6 +92,7 @@ let cases = [
 		best: make_info("g1f3", ["g1f3", "g8f6", "d2d4"], 32),
 		second: make_info("e2e4", ["e2e4", "e7e5", "g1f3"], 24),
 		expected_tags: ["development"],
+		expected_learning_status: "Acceptable",
 		min_coach_notes: 1,
 		min_why_not: 1,
 		expects_reply: true
@@ -168,6 +169,7 @@ let cases = [
 		best: make_info("g1f3", ["g1f3", "g8f6", "d2d4"], 32),
 		second: make_info("e2e4", ["e2e4", "e7e5", "g1f3"], 24),
 		expected_tags: ["slow_pawn"],
+		expected_learning_status: "Dubious",
 		min_why_not: 2
 	},
 	{
@@ -178,6 +180,7 @@ let cases = [
 		best: make_info("g1f3", ["g1f3", "b8c6", "f1c4"], 36),
 		second: make_info("b1c3", ["b1c3", "g8f6", "g1f3"], 28),
 		expected_tags: ["early_king"],
+		expected_learning_status: "Clear concession",
 		min_coach_notes: 1,
 		min_why_not: 2
 	},
@@ -189,9 +192,43 @@ let cases = [
 		best: make_info("g1f3", ["g1f3", "b8c6", "f1c4", "g8f6"], 36),
 		second: make_info("b1c3", ["b1c3", "g8f6", "g1f3"], 28),
 		expected_tags: ["early_king"],
+		expected_learning_status: "Clear concession",
 		min_coach_notes: 1,
 		min_why_not: 3,
 		expects_reply: true
+	},
+	{
+		name: "pawn_structure",
+		fen: "rnbqkbnr/pppppppp/8/8/3PP3/8/PPP2PPP/RNBQKBNR w KQkq - 0 1",
+		nodeMove: null,
+		info: make_info("c2c3", ["c2c3", "g8f6", "f1d3"], 26),
+		best: make_info("c2c3", ["c2c3", "g8f6", "f1d3"], 26),
+		second: make_info("g1f3", ["g1f3", "g8f6", "f1d3"], 18),
+		expected_tags: ["pawn_structure"],
+		min_coach_notes: 1,
+		min_why_not: 1
+	},
+	{
+		name: "outpost_knight",
+		fen: "r1bqkbnr/pp3ppp/8/8/3PP3/2N5/PPP2PPP/R1BQKBNR w KQkq - 0 1",
+		nodeMove: null,
+		info: make_info("c3d5", ["c3d5", "g8f6", "d5f6"], 52),
+		best: make_info("c3d5", ["c3d5", "g8f6", "d5f6"], 52),
+		second: make_info("g1f3", ["g1f3", "g8f6", "f1d3"], 28),
+		expected_tags: ["outpost"],
+		min_coach_notes: 1,
+		min_why_not: 1,
+		expects_reply: true
+	},
+	{
+		name: "bishop_quality",
+		fen: "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR w KQkq - 0 1",
+		nodeMove: null,
+		info: make_info("e2e3", ["e2e3", "g8f6", "f1d3"], 22),
+		best: make_info("e2e3", ["e2e3", "g8f6", "f1d3"], 22),
+		second: make_info("g1f3", ["g1f3", "g8f6", "e2e3"], 16),
+		min_coach_notes: 1,
+		min_why_not: 1
 	},
 ];
 
@@ -262,6 +299,15 @@ for (let language of ["English", "\u7b80\u4f53\u4e2d\u6587", "\u7e41\u9ad4\u4e2d
 			throw new Error(`Expected a full coach scorecard for ${sample.name} in ${language}`);
 		}
 
+		if (sample.best && sample.second) {
+			let metric_labels = new Set((rendered.coach_metrics || []).map(metric => metric.label));
+			for (let label of ["Pawn structure", "Squares", "Minor pieces", "Endgame"].map(translate)) {
+				if (!metric_labels.has(label)) {
+					throw new Error(`Missing long-term metric ${label} for ${sample.name} in ${language}`);
+				}
+			}
+		}
+
 		for (let metric of rendered.coach_metrics || []) {
 			if (!metric || !metric.label || !metric.text) {
 				throw new Error(`Empty coach metric for ${sample.name} in ${language}`);
@@ -289,9 +335,39 @@ for (let language of ["English", "\u7b80\u4f53\u4e2d\u6587", "\u7e41\u9ad4\u4e2d
 			assert_no_placeholders(rendered.reply_label, `${sample.name}/${language}/reply-label`);
 			assert_no_placeholders(rendered.reply_summary, `${sample.name}/${language}/reply-summary`);
 			assert_no_placeholders(rendered.reply_note, `${sample.name}/${language}/reply-note`);
+			if (sample.best && sample.info && sample.best.move === sample.info.move && /still prefers your move|\u4ecd\u7136\u66f4\u559c\u6b22\u4f60\u7684\u8fd9\u624b|\u4ecd\u7136\u66f4\u559c\u6b61\u4f60\u7684\u9019\u624b/.test(rendered.reply_note)) {
+				throw new Error(`Best line reply note should not use fallback comparison wording for ${sample.name} in ${language}`);
+			}
 			if (rendered.reply_theme) {
 				assert_no_placeholders(rendered.reply_theme, `${sample.name}/${language}/reply-theme`);
 			}
+		}
+
+		let learning = move_explainer.buildLearningFeedback({
+			node,
+			info: sample.info,
+			bestInfo: sample.best,
+			secondInfo: sample.second,
+			infoList: info_list
+		});
+		let rendered_learning = move_explainer.renderLearningFeedback(learning, translate);
+
+		for (let field of [rendered_learning.title, rendered_learning.move_label, rendered_learning.move, rendered_learning.status, rendered_learning.summary]) {
+			if (!field || !field.trim()) {
+				throw new Error(`Empty learning field for ${sample.name} in ${language}`);
+			}
+			assert_no_placeholders(field, `${sample.name}/${language}/learning`);
+		}
+
+		if (sample.expected_learning_status && rendered_learning.status !== translate(sample.expected_learning_status)) {
+			throw new Error(`Unexpected learning status for ${sample.name} in ${language}: ${rendered_learning.status}`);
+		}
+
+		for (let field of [rendered_learning.issue_text, rendered_learning.better_text, rendered_learning.reply_text, rendered_learning.note_text]) {
+			if (!field) {
+				continue;
+			}
+			assert_no_placeholders(field, `${sample.name}/${language}/learning-detail`);
 		}
 	}
 }

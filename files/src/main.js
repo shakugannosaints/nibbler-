@@ -113,6 +113,12 @@ function startup() {
 		win.focus();
 	});
 
+	win.on("focus", () => {
+		setTimeout(() => {
+			raise_explanation_popup(false);
+		}, 30);
+	});
+
 	win.webContents.once("crashed", () => {
 		alert(win, messages.renderer_crash);
 	});
@@ -369,7 +375,7 @@ function show_explanation_popup() {
 
 	if (explanation_win && !explanation_win.isDestroyed()) {
 		explanation_win.show();
-		raise_explanation_popup();
+		raise_explanation_popup(true);
 		send_explanation_popup_open_state(true);
 		send_explanation_popup_payload();
 		return;
@@ -400,13 +406,13 @@ function show_explanation_popup() {
 			explanation_win.webContents.zoomFactor = desired_zoomfactor_global;
 		}
 		explanation_win.show();
-		raise_explanation_popup();
+		raise_explanation_popup(true);
 		send_explanation_popup_open_state(true);
 		send_explanation_popup_payload();
 	});
 
 	explanation_win.on("focus", () => {
-		raise_explanation_popup();
+		raise_explanation_popup(false);
 	});
 
 	explanation_win.on("closed", () => {
@@ -427,16 +433,18 @@ function send_explanation_popup_payload() {
 	explanation_win.webContents.send("set_explanation_popup", latest_explanation_popup_payload);
 }
 
-function raise_explanation_popup() {
+function raise_explanation_popup(should_focus = false) {
 	if (!explanation_win || explanation_win.isDestroyed()) {
 		return;
 	}
 
-	explanation_win.setAlwaysOnTop(true, "floating");
+	explanation_win.setAlwaysOnTop(true, "pop-up-menu");
 	if (typeof explanation_win.moveTop === "function") {
 		explanation_win.moveTop();
 	}
-	explanation_win.focus();
+	if (should_focus) {
+		explanation_win.focus();
+	}
 }
 
 function send_explanation_popup_open_state(state) {
@@ -1612,6 +1620,17 @@ function menu_build() {
 						win.webContents.send("call", {
 							fn: "toggle",
 							args: ["show_explanation_panel"],
+						});
+					}
+				},
+				{
+					label: translate.t("Show learning feedback"),
+					type: "checkbox",
+					checked: config.show_learning_feedback,
+					click: () => {
+						win.webContents.send("call", {
+							fn: "toggle",
+							args: ["show_learning_feedback"],
 						});
 					}
 				},

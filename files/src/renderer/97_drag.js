@@ -145,7 +145,7 @@ const drag_handler = {
 
 			if (target_element) {
 				let move = this.drag_state.from_square + target_element.id.slice(8);
-				let ok = hub.move(move);
+				let ok = hub.move(move, {origin: "user_board"});
 				if (!ok && config.click_spotlight) {	// The spotlight needs to be cleared.
 					hub.draw_canvas_arrows();
 				}

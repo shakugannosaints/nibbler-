@@ -202,7 +202,9 @@ let explainbox_props = {
 		let second_info = base_touched_list.find(info => best_info && info.move !== best_info.move) || touched_list.find(info => best_info && info.move !== best_info.move) || null;
 		let analysis_version = selected_info && selected_info.__hover_source ? (selected_info.__hover_cache_version || 0) : 0;
 		let hover_status = (hover_state && hover_state.move === selected_move) ? hover_state.status : "";
-		let signature = `${panel_visible}|${config.language}|${node ? node.id : "null"}|${node && node.table ? node.table.version : "null"}|${selected_move || ""}|${preview_move || ""}|${fixed_move || ""}|${analysis_version}|${hover_status}`;
+		let learning_feedback = (config.show_learning_feedback && !preview_move && !fixed_move && node && node.learning_feedback) ? node.learning_feedback : null;
+		let learning_signature = learning_feedback ? (learning_feedback.signature || learning_feedback.move || "learning") : "";
+		let signature = `${panel_visible}|${config.show_learning_feedback}|${config.language}|${node ? node.id : "null"}|${node && node.table ? node.table.version : "null"}|${selected_move || ""}|${preview_move || ""}|${fixed_move || ""}|${analysis_version}|${hover_status}|${learning_signature}`;
 
 		if (signature === this.last_drawn_explanation_signature) {
 			return;
@@ -218,10 +220,46 @@ let explainbox_props = {
 			return;
 		}
 
+		let rendered_learning = learning_feedback ? move_explainer.renderLearningFeedback(learning_feedback, key => translate.t(key)) : null;
+		let learning_html = "";
+
+		if (rendered_learning) {
+			let learning_rows = "";
+
+			if (rendered_learning.issue_text) {
+				learning_rows +=
+					`<div class="learning_feedback_row"><span class="gray">${SafeStringHTML(rendered_learning.issue_label)}:</span> ${SafeStringHTML(rendered_learning.issue_text)}</div>`;
+			}
+			if (rendered_learning.better_text) {
+				learning_rows +=
+					`<div class="learning_feedback_row"><span class="gray">${SafeStringHTML(rendered_learning.better_label)}:</span> ${SafeStringHTML(rendered_learning.better_text)}</div>`;
+			}
+			if (rendered_learning.reply_text) {
+				learning_rows +=
+					`<div class="learning_feedback_row"><span class="gray">${SafeStringHTML(rendered_learning.reply_label)}:</span> ${SafeStringHTML(rendered_learning.reply_text)}</div>`;
+			}
+			if (rendered_learning.note_text) {
+				learning_rows +=
+					`<div class="learning_feedback_row learning_feedback_note"><span class="gray">${SafeStringHTML(rendered_learning.note_label)}:</span> ${SafeStringHTML(rendered_learning.note_text)}</div>`;
+			}
+
+			learning_html =
+				`<div class="learning_feedback_card">` +
+					`<div class="learning_feedback_header">` +
+						`<span class="blue">${SafeStringHTML(rendered_learning.title)}</span>` +
+						`<span class="learning_feedback_badge learning_feedback_${SafeStringHTML(rendered_learning.status_tone)}">${SafeStringHTML(rendered_learning.status)}</span>` +
+					`</div>` +
+					`<div class="learning_feedback_move"><span class="gray">${SafeStringHTML(rendered_learning.move_label)}:</span> <span class="white">${SafeStringHTML(rendered_learning.move)}</span></div>` +
+					`<div class="learning_feedback_summary">${SafeStringHTML(rendered_learning.summary)}</div>` +
+					learning_rows +
+				`</div>`;
+		}
+
 		if (node.terminal_reason()) {
 			let terminal_html =
 				`<div class="explainbox_card">` +
 				`<div class="explainbox_header"><span class="blue">${SafeStringHTML(translate.t("Move explanation"))}</span></div>` +
+				learning_html +
 				`<div class="explainbox_summary gray">${SafeStringHTML(node.terminal_reason())}</div>` +
 				`</div>`;
 			if (panel_visible) {
@@ -235,6 +273,7 @@ let explainbox_props = {
 			let empty_html =
 				`<div class="explainbox_card">` +
 				`<div class="explainbox_header"><span class="blue">${SafeStringHTML(translate.t("Move explanation"))}</span></div>` +
+				learning_html +
 				`<div class="explainbox_summary gray">${SafeStringHTML(translate.t("Move explanations will appear once the engine produces candidate moves."))}</div>` +
 				`</div>`;
 			if (panel_visible) {
@@ -328,6 +367,7 @@ let explainbox_props = {
 						`<div class="explainbox_meta gray">${SafeStringHTML(meta)}</div>` +
 						quick_status_html +
 					`</div>` +
+					learning_html +
 					`<div class="explainbox_summary">${SafeStringHTML(rendered.summary)}</div>` +
 					sections_html +
 				`</div>`;
@@ -345,6 +385,7 @@ let explainbox_props = {
 					`<div class="explainbox_meta gray">${SafeStringHTML(meta)}</div>` +
 					quick_status_html +
 				`</div>` +
+				learning_html +
 				`<div class="explainbox_summary">${SafeStringHTML(rendered.summary)}</div>` +
 				sections_html +
 			`</div>`

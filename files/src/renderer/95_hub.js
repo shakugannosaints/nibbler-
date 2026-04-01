@@ -1060,6 +1060,42 @@ let hub_props = {
 		this.draw_explainbox();
 	},
 
+	build_learning_feedback_for_move: function(node, move) {
+		if (!node || node.destroyed || node.terminal_reason() || typeof move !== "string") {
+			return null;
+		}
+
+		let info_list = SortedMoveInfo(node);
+		let info = info_list.find(entry => entry && entry.move === move) || this.hover_analysis.get_info(node, move) || null;
+		let best_info = info_list.find(entry => entry && entry.__touched) || null;
+		let second_info = info_list.find(entry => entry && entry.__touched && (!best_info || entry.move !== best_info.move)) || null;
+
+		if (!info) {
+			info = {
+				move,
+				pv: [move],
+				cp: 0,
+				mate: 0,
+				__touched: false
+			};
+		} else if (!Array.isArray(info.pv) || info.pv.length === 0) {
+			info = Object.assign({}, info, {pv: [move]});
+		}
+
+		let feedback_list = info_list.slice();
+		if (!feedback_list.find(entry => entry && entry.move === info.move)) {
+			feedback_list.push(info);
+		}
+
+		return move_explainer.buildLearningFeedback({
+			node,
+			info,
+			bestInfo: best_info,
+			secondInfo: second_info,
+			infoList: feedback_list
+		});
+	},
+
 	toggle_explanation_panel_expanded: function() {
 		this.explanation_panel_expanded = !this.explanation_panel_expanded;
 		this.sync_explanation_panel_visibility();
@@ -1634,7 +1670,7 @@ let hub_props = {
 	// ---------------------------------------------------------------------------------------------------------------------
 	// Tree manipulation methods...
 
-	move: function(s) {							// It is safe to call this with illegal moves.
+	move: function(s, opts = null) {							// It is safe to call this with illegal moves.
 
 		if (typeof s !== "string") {
 			console.log(`hub.move(${s}) - bad argument`);
@@ -1676,7 +1712,15 @@ let hub_props = {
 			return false;
 		}
 
+		let learning_feedback = null;
+		if (opts && opts.origin === "user_board") {
+			learning_feedback = this.build_learning_feedback_for_move(this.tree.node, s);
+		}
+
 		this.tree.make_move(s);
+		if (opts && opts.origin === "user_board") {
+			this.tree.node.learning_feedback = learning_feedback;
+		}
 		this.position_changed();
 		return true;
 	},
@@ -2119,14 +2163,14 @@ let hub_props = {
 
 		if (!this.active_square && ocm && board.colour(p) !== board.active) {		// Note that we test colour difference
 			this.set_active_square(null);											// to disallow castling moves from OCM
-			this.move(ocm);															// since the dest is the rook (which
+			this.move(ocm, {origin: "user_board"});								// since the dest is the rook (which
 			return;																	// the user might want to click on.)
 		}
 
 		if (this.active_square) {
 			let move = this.active_square.s + p.s;		// e.g. "e2e4" - note promotion char is handled by hub.move()
 			this.set_active_square(null);
-			let ok = this.move(move);
+			let ok = this.move(move, {origin: "user_board"});
 			if (!ok && config.click_spotlight) {		// No need to worry about spotlight arrows if the move actually happened
 				this.draw_canvas_arrows();
 			}
@@ -2329,7 +2373,7 @@ let hub_props = {
 	promotiontable_click: function(event) {
 		let s = EventPathString(event, "promotion_chooser_");
 		this.hide_promotiontable();
-		this.move(s);
+		this.move(s, {origin: "user_board"});
 	},
 
 	handle_file_drop: function(event) {
@@ -2422,6 +2466,9 @@ let hub_props = {
 		}
 		if (option === "show_explanation_panel") {
 			this.sync_explanation_panel_visibility();
+		}
+		if (option === "show_learning_feedback") {
+			this.info_handler.must_draw_explainbox();
 		}
 
 		this.info_handler.must_draw_infobox();

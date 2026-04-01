@@ -93,6 +93,61 @@ body::-webkit-scrollbar-thumb,
 	margin: 0.85em 0 0.7em 0;
 }
 
+.learning_feedback_card {
+	background-color: #0d1117;
+	border: 1px solid #1e2b3a;
+	border-radius: 8px;
+	margin: 0 0 0.95em 0;
+	padding: 0.78em 0.85em 0.38em 0.85em;
+}
+
+.learning_feedback_header {
+	align-items: center;
+	display: flex;
+	gap: 0.8em;
+	justify-content: space-between;
+	margin-bottom: 0.35em;
+}
+
+.learning_feedback_badge {
+	border-radius: 999px;
+	font-size: 0.92em;
+	padding: 0.12em 0.65em;
+}
+
+.learning_feedback_good {
+	background-color: rgba(61, 143, 87, 0.22);
+	color: #98d9aa;
+}
+
+.learning_feedback_warning {
+	background-color: rgba(178, 132, 46, 0.2);
+	color: #e6c36f;
+}
+
+.learning_feedback_bad {
+	background-color: rgba(170, 66, 66, 0.22);
+	color: #f0a4a4;
+}
+
+.learning_feedback_move {
+	margin-bottom: 0.4em;
+}
+
+.learning_feedback_summary {
+	line-height: 1.5;
+	margin-bottom: 0.55em;
+}
+
+.learning_feedback_row {
+	line-height: 1.5;
+	margin-bottom: 0.4em;
+}
+
+.learning_feedback_note {
+	color: #b9b9b9;
+}
+
 .explainbox_section {
 	background-color: #0d0d0d;
 	border: 1px solid #1e1e1e;

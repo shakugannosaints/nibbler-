@@ -1058,6 +1058,532 @@ function strategic_profile(board, colour) {
 	};
 }
 
+function board_with_active(board, colour) {
+	let ret = board.copy();
+	ret.active = colour;
+	return ret;
+}
+
+function legal_moves_from(board, colour, source_square_text) {
+	if (!source_square_text) {
+		return [];
+	}
+
+	return board_with_active(board, colour).movegen().filter(move => move.slice(0, 2) === source_square_text);
+}
+
+function slider_directions(piece) {
+	switch ((piece || "").toLowerCase()) {
+	case "b":
+		return [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+	case "r":
+		return [[1, 0], [-1, 0], [0, 1], [0, -1]];
+	case "q":
+		return [[1, 1], [1, -1], [-1, 1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]];
+	default:
+		return [];
+	}
+}
+
+function first_piece_on_ray(board, start, dx, dy) {
+	for (let x = start.x + dx, y = start.y + dy; in_bounds(x, y); x += dx, y += dy) {
+		let piece = board.state[x][y];
+
+		if (!piece) {
+			continue;
+		}
+
+		return {
+			piece,
+			x,
+			y,
+			s: point_to_square(x, y)
+		};
+	}
+
+	return null;
+}
+
+function line_direction(from, to) {
+	if (!from || !to) {
+		return null;
+	}
+
+	let dx = to.x - from.x;
+	let dy = to.y - from.y;
+
+	if (dx === 0 && dy === 0) {
+		return null;
+	}
+
+	if (dx !== 0 && dy !== 0 && Math.abs(dx) !== Math.abs(dy)) {
+		return null;
+	}
+
+	return [Math.sign(dx), Math.sign(dy)];
+}
+
+function piece_controls_square(board, source, target) {
+	if (!source || !target) {
+		return false;
+	}
+
+	let piece = board.piece(source);
+	if (!piece) {
+		return false;
+	}
+
+	let lower = piece.toLowerCase();
+	let dx = target.x - source.x;
+	let dy = target.y - source.y;
+
+	switch (lower) {
+	case "p": {
+		let dir = piece === "P" ? -1 : 1;
+		return dy === dir && Math.abs(dx) === 1;
+	}
+	case "n":
+		return (Math.abs(dx) === 1 && Math.abs(dy) === 2) || (Math.abs(dx) === 2 && Math.abs(dy) === 1);
+	case "k":
+		return Math.max(Math.abs(dx), Math.abs(dy)) === 1;
+	case "b":
+	case "r":
+	case "q": {
+		let direction = line_direction(source, target);
+		if (!direction) {
+			return false;
+		}
+
+		let [step_x, step_y] = direction;
+		let diagonal = step_x !== 0 && step_y !== 0;
+		let straight = step_x === 0 || step_y === 0;
+
+		if ((lower === "b" && !diagonal) || (lower === "r" && !straight)) {
+			return false;
+		}
+
+		for (let x = source.x + step_x, y = source.y + step_y; x !== target.x || y !== target.y; x += step_x, y += step_y) {
+			if (board.state[x][y] !== "") {
+				return false;
+			}
+		}
+
+		return true;
+	}
+	default:
+		return false;
+	}
+}
+
+function same_line_points(a, b, c) {
+	let abx = b.x - a.x;
+	let aby = b.y - a.y;
+	let acx = c.x - a.x;
+	let acy = c.y - a.y;
+	return abx * acy === aby * acx;
+}
+
+function legal_escape_count(board, colour, source_square_text) {
+	let moves = legal_moves_from(board, colour, source_square_text);
+	return moves.length;
+}
+
+function tactical_motifs(board, board_after, move) {
+	let source = source_square(move);
+	let landing = landing_square(board, move);
+	let mover = board.active;
+	let enemy = opposite_colour(mover);
+	let moved = moved_piece(board, move);
+
+	if (!source || !landing || !moved) {
+		return [];
+	}
+
+	let motifs = [];
+	let seen = new Set();
+	let add_motif = (tag, key, args, score, motif_key) => {
+		if (seen.has(tag)) {
+			return;
+		}
+		seen.add(tag);
+		motifs.push({tag, key, args: args || null, score, motif_key});
+	};
+	let active_board = board_with_active(board_after, mover);
+	let attack_moves = active_board.movegen().filter(candidate => candidate.slice(0, 2) === landing.s);
+	let attacked_targets = attack_moves.map(candidate => {
+		let target = destination_square(candidate);
+		let piece = board_after.piece(target);
+		return piece ? {
+			move: candidate,
+			piece,
+			square: target.s,
+			value: piece_value(piece)
+		} : null;
+	}).filter(Boolean).sort((a, b) => b.value - a.value);
+	let enemy_king = king_square(board_after, enemy);
+	let king_attacked = enemy_king ? piece_controls_square(board_after, landing, enemy_king) : false;
+
+	if ((king_attacked && attacked_targets.length >= 1) || attacked_targets.length >= 2) {
+		if (king_attacked && attacked_targets.length >= 1) {
+			add_motif("fork", "It creates a fork: the king and {piece} are both under immediate pressure.", {
+				piece: piece_name(attacked_targets[0].piece)
+			}, 4.5, "fork");
+		} else if (attacked_targets.length >= 2 && attacked_targets[0].value + attacked_targets[1].value >= 6) {
+			add_motif("fork", "It creates a double attack on the {piece1} and {piece2}, so the opponent may not be able to cover both.", {
+				piece1: piece_name(attacked_targets[0].piece),
+				piece2: piece_name(attacked_targets[1].piece)
+			}, 4.0, "fork");
+		}
+	}
+
+	for (let [dx, dy] of slider_directions(moved)) {
+		let first = null;
+		let second = null;
+
+		for (let x = landing.x + dx, y = landing.y + dy; in_bounds(x, y); x += dx, y += dy) {
+			let piece = board_after.state[x][y];
+
+			if (!piece) {
+				continue;
+			}
+
+			if (piece_colour(piece) === mover) {
+				break;
+			}
+
+			if (!first) {
+				first = {piece, square: point_to_square(x, y)};
+				continue;
+			}
+
+			second = {piece, square: point_to_square(x, y)};
+			break;
+		}
+
+		if (!first || !second || piece_colour(second.piece) === mover) {
+			continue;
+		}
+
+		if (second.piece.toLowerCase() === "k") {
+			add_motif("pin", "It pins the {piece} to the king, so that piece cannot move freely.", {
+				piece: piece_name(first.piece)
+			}, 3.8, "pin");
+		} else if (piece_value(second.piece) > piece_value(first.piece)) {
+			add_motif("skewer", "It sets up a skewer: the {front} is exposed, and the {back} sits behind it.", {
+				front: piece_name(first.piece),
+				back: piece_name(second.piece)
+			}, 3.4, "skewer");
+		}
+	}
+
+	for (let [dx, dy] of [
+		[1, 0], [-1, 0], [0, 1], [0, -1],
+		[1, 1], [1, -1], [-1, 1], [-1, -1]
+	]) {
+		let friendly_slider = first_piece_on_ray(board, source, -dx, -dy);
+		let target_piece = first_piece_on_ray(board, source, dx, dy);
+
+		if (!friendly_slider || !target_piece) {
+			continue;
+		}
+
+		if (piece_colour(friendly_slider.piece) !== mover || piece_colour(target_piece.piece) !== enemy) {
+			continue;
+		}
+
+		if (!slider_directions(friendly_slider.piece).some(([sx, sy]) => sx === dx && sy === dy)) {
+			continue;
+		}
+
+		let slider_point = square_to_point(friendly_slider.s);
+		let target_point = square_to_point(target_piece.s);
+
+		if (!piece_controls_square(board_after, slider_point, target_point)) {
+			continue;
+		}
+
+		if (landing.s !== source.s && same_line_points(slider_point, source, landing) && same_line_points(slider_point, source, target_point)) {
+			continue;
+		}
+
+		if (target_piece.piece.toLowerCase() === "k" || piece_value(target_piece.piece) >= 3) {
+			add_motif("discovered_attack", "It uncovers a discovered attack, bringing another piece into the game at once.", null, 3.2, "discovered attack");
+		}
+	}
+
+	let enemy_active_board = board_with_active(board_after, enemy);
+	let enemy_king_moves = enemy_king ? enemy_active_board.movegen().filter(candidate => candidate.slice(0, 2) === enemy_king.s) : [];
+
+	if (enemy_king && enemy_king_moves.length <= 1 && (moved === "R" || moved === "r" || moved === "Q" || moved === "q") && king_attacked) {
+		let back_rank = (enemy === "w" && enemy_king.y === 7) || (enemy === "b" && enemy_king.y === 0);
+		if (back_rank) {
+			add_motif("back_rank", "It leans on the back rank, where the king has very little room.", null, 3.6, "back-rank pressure");
+		}
+	}
+
+	for (let target of attacked_targets) {
+		if (target.value < 3) {
+			continue;
+		}
+
+		let escapes = legal_escape_count(board_after, enemy, target.square);
+
+		if (escapes <= 1) {
+			add_motif("trapped_piece", "It makes the {piece} awkwardly placed, with very few safe squares left.", {
+				piece: piece_name(target.piece)
+			}, 2.8, "piece trap");
+			break;
+		}
+	}
+
+	return motifs.sort((a, b) => b.score - a.score);
+}
+
+function file_counts_for_pawns(board, colour) {
+	let counts = new Array(8).fill(0);
+
+	for (let pawn of pawn_points(board, colour)) {
+		counts[pawn.x]++;
+	}
+
+	return counts;
+}
+
+function has_pawn_on(board, colour, square_text) {
+	let point = square_to_point(square_text);
+	let pawn = colour === "w" ? "P" : "p";
+	return !!point && board.state[point.x][point.y] === pawn;
+}
+
+function detect_iqp(board, colour, counts) {
+	for (let file of [3, 4]) {
+		if (counts[file] !== 1) {
+			continue;
+		}
+
+		let left = file > 0 ? counts[file - 1] : 0;
+		let right = file < 7 ? counts[file + 1] : 0;
+
+		if (left === 0 && right === 0) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+function detect_hanging_pawns(board, colour) {
+	let pairs = [[2, 3, 1, 4], [3, 4, 2, 5]];
+
+	for (let [file1, file2, outer_left, outer_right] of pairs) {
+		let counts = file_counts_for_pawns(board, colour);
+		if (counts[file1] >= 1 && counts[file2] >= 1 && counts[outer_left] === 0 && counts[outer_right] === 0) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+function carlsbad_minority_side(board) {
+	if (has_pawn_on(board, "w", "d4") && has_pawn_on(board, "b", "d5") && !has_pawn_on(board, "w", "c4") && has_pawn_on(board, "b", "c6")) {
+		return "w";
+	}
+	if (has_pawn_on(board, "b", "d5") && has_pawn_on(board, "w", "d4") && !has_pawn_on(board, "b", "c5") && has_pawn_on(board, "w", "c3")) {
+		return "b";
+	}
+	return "";
+}
+
+function detect_closed_center(board) {
+	let locked_e = has_pawn_on(board, "w", "e4") && has_pawn_on(board, "b", "e5");
+	let locked_d = has_pawn_on(board, "w", "d4") && has_pawn_on(board, "b", "d5");
+	let crossed = (has_pawn_on(board, "w", "d5") && has_pawn_on(board, "b", "e6")) || (has_pawn_on(board, "b", "d4") && has_pawn_on(board, "w", "e3"));
+	return (locked_d && locked_e) || crossed;
+}
+
+function detect_benoni(board, colour) {
+	if (colour === "w") {
+		return has_pawn_on(board, "w", "d5") && has_pawn_on(board, "b", "c5") && has_pawn_on(board, "b", "e6");
+	}
+	return has_pawn_on(board, "b", "d4") && has_pawn_on(board, "w", "c4") && has_pawn_on(board, "w", "e3");
+}
+
+function detect_colour_complex(board, colour, bishop_profile) {
+	let pawns = pawn_points(board, colour);
+	if (pawns.length < 4) {
+		return false;
+	}
+
+	let dark = pawns.filter(pawn => square_colour_index(pawn) === 1).length;
+	let light = pawns.length - dark;
+	let majority = Math.max(dark, light);
+
+	return majority >= pawns.length - 1 && bishop_profile.bad > bishop_profile.good;
+}
+
+function structure_state(board, colour, strategic) {
+	let counts = file_counts_for_pawns(board, colour);
+
+	if (carlsbad_minority_side(board) === colour) {
+		return {name: "carlsbad", plan: "build queenside pressure and the minority attack"};
+	}
+	if (detect_hanging_pawns(board, colour)) {
+		return {name: "hanging_pawns", plan: "keep the pawns dynamic before they become targets"};
+	}
+	if (detect_iqp(board, colour, counts)) {
+		return {name: "iqp", plan: "use activity and central breaks"};
+	}
+	if (detect_benoni(board, colour)) {
+		return {name: "benoni", plan: "use space and outposts"};
+	}
+	if (detect_closed_center(board)) {
+		return {name: "closed_center", plan: "play on the wings and use outposts"};
+	}
+	if (detect_colour_complex(board, colour, strategic.bishop)) {
+		return {name: "colour_complex", plan: "fight for the weakened colour complex"};
+	}
+
+	return {name: null, plan: null};
+}
+
+function structure_tag(name) {
+	switch (name) {
+	case "iqp": return "structure_iqp";
+	case "hanging_pawns": return "structure_hanging_pawns";
+	case "carlsbad": return "structure_carlsbad";
+	case "closed_center": return "structure_closed_center";
+	case "benoni": return "structure_benoni";
+	case "colour_complex": return "structure_colour_complex";
+	default: return "quiet";
+	}
+}
+
+function structure_name_key(name) {
+	switch (name) {
+	case "iqp": return "isolated queen's pawn";
+	case "hanging_pawns": return "hanging pawns";
+	case "carlsbad": return "Carlsbad structure";
+	case "closed_center": return "closed center";
+	case "benoni": return "Benoni structure";
+	case "colour_complex": return "colour complex";
+	default: return "structure";
+	}
+}
+
+function structure_plan_key(name) {
+	switch (name) {
+	case "iqp": return "use activity and central breaks";
+	case "hanging_pawns": return "keep the pawns dynamic before they become targets";
+	case "carlsbad": return "build queenside pressure and the minority attack";
+	case "closed_center": return "play on the wings and use outposts";
+	case "benoni": return "use space and outposts";
+	case "colour_complex": return "fight for the weakened colour complex";
+	default: return "improve piece placement";
+	}
+}
+
+function structure_theme_key(name) {
+	switch (name) {
+	case "iqp":
+		return "It fits an isolated queen's pawn position: activity and central breaks matter more than passive pawn care.";
+	case "hanging_pawns":
+		return "It keeps the hanging pawns dynamic, where space and activity matter before the pawns become targets.";
+	case "carlsbad":
+		return "It fits the Carlsbad plan by leaning into queenside pressure and the minority attack.";
+	case "closed_center":
+		return "With the center closed, the plan usually shifts to wing play and strong outposts.";
+	case "benoni":
+		return "This has a Benoni flavor: space and outposts matter more than immediate simplification.";
+	case "colour_complex":
+		return "The pawn map points to a colour-complex battle, so control of those squares matters more than a quick tactic.";
+	default:
+		return "";
+	}
+}
+
+function structure_plan_profile(board, board_after, move, colour) {
+	let before = structure_state(board, colour, strategic_profile(board, colour));
+	let after_strategic = strategic_profile(board_after, colour);
+	let after = structure_state(board_after, colour, after_strategic);
+	let structure = after.name ? after : before;
+	let source = source_square(move);
+	let landing = landing_square(board, move);
+	let moved = moved_piece(board, move);
+	let score = 0;
+
+	if (!structure.name || !source || !landing || !moved) {
+		return {
+			name: structure.name,
+			plan: structure.plan,
+			score: 0,
+			tag: structure_tag(structure.name),
+			theme_key: structure_theme_key(structure.name)
+		};
+	}
+
+	switch (structure.name) {
+	case "iqp":
+		if (["N", "n", "B", "b", "R", "r", "Q", "q"].includes(moved)) {
+			score += 0.9;
+		}
+		if (["d", "e"].includes(landing.s[0])) {
+			score += 0.6;
+		}
+		break;
+	case "hanging_pawns":
+		if (["N", "n", "B", "b", "R", "r", "Q", "q"].includes(moved)) {
+			score += 0.7;
+		}
+		if (["c", "d", "e"].includes(landing.s[0])) {
+			score += 0.5;
+		}
+		break;
+	case "carlsbad": {
+		if ((moved === "P" || moved === "p") && ["a", "b"].includes(source.s[0]) && ["a", "b", "c"].includes(landing.s[0])) {
+			score += 1.3;
+		}
+		if (["R", "r", "Q", "q"].includes(moved) && ["b", "c"].includes(landing.s[0])) {
+			score += 0.9;
+		}
+		break;
+	}
+	case "closed_center":
+		if ((moved === "P" || moved === "p") && ["a", "b", "c", "f", "g", "h"].includes(landing.s[0])) {
+			score += 1.0;
+		}
+		if ((moved === "N" || moved === "n") && is_enemy_half_square(landing, colour)) {
+			score += 0.6;
+		}
+		break;
+	case "benoni":
+		if ((moved === "N" || moved === "n") && is_enemy_half_square(landing, colour)) {
+			score += 1.0;
+		}
+		if ((moved === "P" || moved === "p") && ["e", "f", "c", "b"].includes(landing.s[0])) {
+			score += 0.7;
+		}
+		break;
+	case "colour_complex":
+		if ((moved === "B" || moved === "b" || moved === "N" || moved === "n" || moved === "Q" || moved === "q") && square_colour_index(landing) !== square_colour_index(source)) {
+			score += 0.9;
+		}
+		break;
+	}
+
+	if (before.name !== after.name && after.name) {
+		score += 0.4;
+	}
+
+	return {
+		name: structure.name,
+		plan: structure.plan,
+		score,
+		tag: structure_tag(structure.name),
+		theme_key: structure_theme_key(structure.name)
+	};
+}
+
 function line_snapshot(board, info, max_plies = 6) {
 	let moves = Array.isArray(info && info.pv) && info.pv.length > 0 ? info.pv : [info.move];
 	let temp = board;
@@ -1120,9 +1646,12 @@ function side_follow_up(snapshot) {
 
 function line_features(board, info) {
 	let mover = board.active;
+	let board_after = board.move(info.move);
 	let snapshot = line_snapshot(board, info);
 	let own_strategic = strategic_profile(snapshot.board, mover);
 	let enemy_strategic = strategic_profile(snapshot.board, opposite_colour(mover));
+	let immediate_tactics = tactical_motifs(board, board_after, info.move);
+	let immediate_structure = structure_plan_profile(board, board_after, info.move, mover);
 
 	return {
 		snapshot,
@@ -1139,6 +1668,8 @@ function line_features(board, info) {
 		minor_pieces: own_strategic.minor_pieces - enemy_strategic.minor_pieces,
 		endgame_comfort: own_strategic.endgame.score - enemy_strategic.endgame.score,
 		remaining_material: total_material(snapshot.board),
+		tactics: immediate_tactics,
+		structure: immediate_structure,
 		strategic: {
 			own: own_strategic,
 			enemy: enemy_strategic
@@ -1202,6 +1733,9 @@ function coach_metrics_for({board, currentInfo, targetInfo, currentPrimary, targ
 	let endgame_gap = current.endgame_comfort - target.endgame_comfort;
 	let current_outpost = current.strategic.own.knight.best_outpost;
 	let target_outpost = target.strategic.own.knight.best_outpost;
+	let current_tactic = current.tactics[0] || null;
+	let target_tactic = target.tactics[0] || null;
+	let structure_gap = (current.structure ? current.structure.score : 0) - (target.structure ? target.structure.score : 0);
 
 	if (material_gap >= 1) {
 		push_coach_metric(metrics, "Material", "better than {other_move} by about {delta} after the next few PV moves.", {
@@ -1251,6 +1785,20 @@ function coach_metrics_for({board, currentInfo, targetInfo, currentPrimary, targ
 		push_coach_metric(metrics, "Center / space", "about the same as {other_move}.", {other_move});
 	}
 
+	if (current_tactic && (!target_tactic || current_tactic.tag !== target_tactic.tag)) {
+		push_coach_metric(metrics, "Tactics", "keeps the immediate {motif}, which {other_move} does not.", {
+			other_move,
+			motif: current_tactic.motif_key
+		});
+	} else if (target_tactic && (!current_tactic || current_tactic.tag !== target_tactic.tag)) {
+		push_coach_metric(metrics, "Tactics", "{other_move} keeps the immediate {motif}, which this line misses.", {
+			other_move,
+			motif: target_tactic.motif_key
+		});
+	} else {
+		push_coach_metric(metrics, "Tactics", "tactical pressure is about the same as after {other_move}.", {other_move});
+	}
+
 	if (pawn_structure_gap >= 1.1) {
 		push_coach_metric(metrics, "Pawn structure", "healthier than {other_move}: fewer isolated, doubled, or backward pawns, and the chain stays more connected.", {other_move});
 	} else if (pawn_structure_gap <= -1.1) {
@@ -1295,6 +1843,28 @@ function coach_metrics_for({board, currentInfo, targetInfo, currentPrimary, targ
 		push_coach_metric(metrics, "Endgame", "endgame prospects are less comfortable than after {other_move}.", {other_move});
 	} else {
 		push_coach_metric(metrics, "Endgame", "endgame prospects are about as comfortable as after {other_move}.", {other_move});
+	}
+
+	if (current.structure && current.structure.name && structure_gap >= 0.8) {
+		push_coach_metric(metrics, "Structure / plan", "fits the {structure_name} plan more naturally than {other_move}.", {
+			other_move,
+			structure_name: structure_name_key(current.structure.name)
+		});
+	} else if (target.structure && target.structure.name && structure_gap <= -0.8) {
+		push_coach_metric(metrics, "Structure / plan", "{other_move} fits the {structure_name} plan more naturally.", {
+			other_move,
+			structure_name: structure_name_key(target.structure.name)
+		});
+	} else if (current.structure && current.structure.name) {
+		push_coach_metric(metrics, "Structure / plan", "heads for a similar {structure_name} plan to {other_move}.", {
+			other_move,
+			structure_name: structure_name_key(current.structure.name)
+		});
+	} else if (target.structure && target.structure.name) {
+		push_coach_metric(metrics, "Structure / plan", "heads for a similar {structure_name} plan to {other_move}.", {
+			other_move,
+			structure_name: structure_name_key(target.structure.name)
+		});
 	}
 
 	if (current.follow_up && target.follow_up) {
@@ -1349,6 +1919,9 @@ function why_not_reasons_for({board, currentInfo, targetInfo, currentPrimary, ta
 	let square_gap = current.squares - target.squares;
 	let minor_piece_gap = current.minor_pieces - target.minor_pieces;
 	let endgame_gap = current.endgame_comfort - target.endgame_comfort;
+	let current_tactic = current.tactics[0] || null;
+	let target_tactic = target.tactics[0] || null;
+	let structure_gap = (current.structure ? current.structure.score : 0) - (target.structure ? target.structure.score : 0);
 
 	if (current_better && material_gap >= 1) {
 		push_why_not_reason(reasons, seen, "Tactics", "The tactical edge is material: after the next few PV moves, this line comes out about {delta} better than {other_move}.", {
@@ -1359,6 +1932,17 @@ function why_not_reasons_for({board, currentInfo, targetInfo, currentPrimary, ta
 		push_why_not_reason(reasons, seen, "Tactics", "The tactical issue is material: after the next few PV moves, {other_move} comes out about {delta} better.", {
 			delta: format_pawn_unit(material_gap),
 			other_move
+		});
+	}
+
+	if (current_better && current_tactic && (!target_tactic || current_tactic.tag !== target_tactic.tag)) {
+		push_why_not_reason(reasons, seen, "Tactics", "Tactically, the alternative misses the immediate {motif}.", {
+			motif: current_tactic.motif_key
+		});
+	} else if (!current_better && target_tactic && (!current_tactic || current_tactic.tag !== target_tactic.tag)) {
+		push_why_not_reason(reasons, seen, "Tactics", "Tactically, {other_move} keeps the immediate {motif}, which this move misses.", {
+			other_move,
+			motif: target_tactic.motif_key
 		});
 	}
 
@@ -1453,6 +2037,17 @@ function why_not_reasons_for({board, currentInfo, targetInfo, currentPrimary, ta
 		});
 	}
 
+	if (current_better && current.structure && current.structure.name && structure_gap >= 0.8) {
+		push_why_not_reason(reasons, seen, "Structure / plan", "Structurally, the alternative fits the {structure_name} plan less naturally.", {
+			structure_name: structure_name_key(current.structure.name)
+		});
+	} else if (!current_better && target.structure && target.structure.name && structure_gap <= -0.8) {
+		push_why_not_reason(reasons, seen, "Structure / plan", "Structurally, {other_move} fits the {structure_name} plan more naturally.", {
+			other_move,
+			structure_name: structure_name_key(target.structure.name)
+		});
+	}
+
 	if (replyPreview) {
 		if (!current_better && replyPreview.note_args && replyPreview.note_args.reply_move && replyPreview.note_args.pv) {
 			push_why_not_reason(reasons, seen, "Plan", "The plan problem is that after {reply_move}, the opponent can often continue with {pv}.", {
@@ -1510,6 +2105,9 @@ function coach_notes_for({board, currentInfo, targetInfo, currentPrimary, target
 	let endgame_gap = current.endgame_comfort - target.endgame_comfort;
 	let current_outpost = current.strategic.own.knight.best_outpost;
 	let target_outpost = target.strategic.own.knight.best_outpost;
+	let current_tactic = current.tactics[0] || null;
+	let target_tactic = target.tactics[0] || null;
+	let structure_gap = (current.structure ? current.structure.score : 0) - (target.structure ? target.structure.score : 0);
 
 	if (current_better && material_gap >= 1) {
 		push_coach_note(notes, seen, "Material is one of the differences: this line comes out about {delta} better than {other_move} after the first few PV moves.", {
@@ -1553,6 +2151,19 @@ function coach_notes_for({board, currentInfo, targetInfo, currentPrimary, target
 		push_coach_note(notes, seen, "{other_move} fights harder for the center and claims more space.", {other_move});
 	}
 
+	if (notes.length < 3) {
+		if (current_better && current_tactic && (!target_tactic || current_tactic.tag !== target_tactic.tag)) {
+			push_coach_note(notes, seen, "This line keeps the immediate {motif}, so the opponent still has a tactical problem to solve.", {
+				motif: current_tactic.motif_key
+			});
+		} else if (!current_better && target_tactic && (!current_tactic || current_tactic.tag !== target_tactic.tag)) {
+			push_coach_note(notes, seen, "{other_move} keeps the immediate {motif}, which is one reason it is more convincing.", {
+				other_move,
+				motif: target_tactic.motif_key
+			});
+		}
+	}
+
 	if (current_better && pawn_structure_gap >= 1.1) {
 		push_coach_note(notes, seen, "Long-term, the pawn structure stays healthier than after {other_move}.", {other_move});
 	} else if (!current_better && pawn_structure_gap <= -1.1) {
@@ -1587,6 +2198,21 @@ function coach_notes_for({board, currentInfo, targetInfo, currentPrimary, target
 			push_coach_note(notes, seen, "If the game simplifies, this line points to a more comfortable endgame.", null);
 		} else if (!current_better && endgame_gap <= -1.2) {
 			push_coach_note(notes, seen, "If the game simplifies, {other_move} points to a more comfortable endgame.", {other_move});
+		}
+	}
+
+	if (notes.length < 3) {
+		if (current.structure && current.structure.name && (current_better || structure_gap >= 0.8)) {
+			push_coach_note(notes, seen, "The structure is now {structure_name}, so the long-term plan is to {structure_plan}.", {
+				structure_name: structure_name_key(current.structure.name),
+				structure_plan: structure_plan_key(current.structure.name)
+			});
+		} else if (target.structure && target.structure.name && structure_gap <= -0.8) {
+			push_coach_note(notes, seen, "{other_move} fits the {structure_name} structure more naturally, where the plan is to {structure_plan}.", {
+				other_move,
+				structure_name: structure_name_key(target.structure.name),
+				structure_plan: structure_plan_key(target.structure.name)
+			});
 		}
 	}
 
@@ -1728,6 +2354,24 @@ function summary_key_for(primary, rank, best_value, delta_cp, top_gap, mate, tou
 		if (mate) {
 			return "This move converts the position immediately with a forcing mating attack.";
 		}
+		if (primary === "fork") {
+			return "This move creates a double attack and immediately asks tactical questions.";
+		}
+		if (primary === "pin") {
+			return "This pin makes the opponent's coordination much harder.";
+		}
+		if (primary === "skewer") {
+			return "This skewer lines the pieces up awkwardly and threatens material.";
+		}
+		if (primary === "discovered_attack") {
+			return "This discovered attack suddenly brings another piece into the action.";
+		}
+		if (primary === "back_rank") {
+			return "This leans on a back-rank weakness and keeps the king short of squares.";
+		}
+		if (primary === "trapped_piece") {
+			return "This nearly traps a piece, so the opponent may have no comfortable square.";
+		}
 		if (primary === "castle") {
 			return "The first priority is king safety, so castling now makes the most sense.";
 		}
@@ -1739,6 +2383,24 @@ function summary_key_for(primary, rank, best_value, delta_cp, top_gap, mate, tou
 		}
 		if (primary === "save_piece") {
 			return "This tidies up a loose piece and removes a tactical problem.";
+		}
+		if (primary === "structure_iqp") {
+			return "This fits the isolated queen's pawn plan: keep the pieces active before the pawn becomes a target.";
+		}
+		if (primary === "structure_hanging_pawns") {
+			return "This fits the hanging-pawn plan: stay active before the pawns become targets.";
+		}
+		if (primary === "structure_carlsbad") {
+			return "This fits a Carlsbad-type plan, where queenside pressure is the long-term story.";
+		}
+		if (primary === "structure_closed_center") {
+			return "With the center closed, this follows the usual wing-play plan.";
+		}
+		if (primary === "structure_benoni") {
+			return "This follows a Benoni-style plan built around space, outposts, and active pieces.";
+		}
+		if (primary === "structure_colour_complex") {
+			return "This follows the colour-complex plan: fight for the weakened squares.";
 		}
 		if (primary === "king_activity") {
 			return "In the endgame, the king is strong enough to step forward.";
@@ -1796,6 +2458,14 @@ function summary_key_for(primary, rank, best_value, delta_cp, top_gap, mate, tou
 		return "It solves the immediate problem, but not in the most precise way.";
 	}
 
+	if (["fork", "pin", "skewer", "discovered_attack", "back_rank", "trapped_piece"].includes(primary)) {
+		return "It sees the right tactical idea, but not in the cleanest version.";
+	}
+
+	if (["structure_iqp", "structure_hanging_pawns", "structure_carlsbad", "structure_closed_center", "structure_benoni", "structure_colour_complex"].includes(primary)) {
+		return "It follows a reasonable long-term plan, but it is not the engine's cleanest version.";
+	}
+
 	if (best_value >= 120) {
 		return "It keeps the right idea, but misses a cleaner continuation.";
 	}
@@ -1817,6 +2487,13 @@ function pv_hint_key_for(primary, has_pv) {
 	}
 
 	switch (primary) {
+	case "fork":
+	case "pin":
+	case "skewer":
+	case "discovered_attack":
+	case "back_rank":
+	case "trapped_piece":
+		return "The engine keeps the tactical pressure going with {pv}.";
 	case "castle":
 		return "After castling, the PV continues with {pv}.";
 	case "development":
@@ -1837,6 +2514,18 @@ function pv_hint_key_for(primary, has_pv) {
 		return "The continuation keeps improving the minor pieces with {pv}.";
 	case "endgame_direction":
 		return "The continuation heads for a more comfortable endgame with {pv}.";
+	case "structure_iqp":
+		return "The continuation keeps the isolated queen's pawn position active with {pv}.";
+	case "structure_hanging_pawns":
+		return "The continuation keeps the hanging pawns dynamic with {pv}.";
+	case "structure_carlsbad":
+		return "The continuation keeps the queenside pressure growing with {pv}.";
+	case "structure_closed_center":
+		return "The continuation keeps the wing plan going with {pv}.";
+	case "structure_benoni":
+		return "The continuation keeps leaning on space and outposts with {pv}.";
+	case "structure_colour_complex":
+		return "The continuation keeps pressing the weakened colour complex with {pv}.";
 	case "check":
 	case "mate":
 	case "capture":
@@ -1861,6 +2550,12 @@ function pv_hint_key_for(primary, has_pv) {
 
 function idea_phrase_key(primary) {
 	switch (primary) {
+	case "fork": return "create a double attack";
+	case "pin": return "pin a piece to a bigger target";
+	case "skewer": return "set up a skewer";
+	case "discovered_attack": return "uncover a discovered attack";
+	case "back_rank": return "lean on the back rank";
+	case "trapped_piece": return "trap a piece";
 	case "development": return "finish development";
 	case "center_pawn": return "claim central space";
 	case "castle": return "secure the king";
@@ -1878,6 +2573,12 @@ function idea_phrase_key(primary) {
 	case "bishop_quality": return "improve the bishop against the pawn chain";
 	case "knight_quality": return "improve the knight's long-term square";
 	case "endgame_direction": return "steer toward a comfortable endgame";
+	case "structure_iqp": return "play around the isolated queen's pawn";
+	case "structure_hanging_pawns": return "keep the hanging pawns active";
+	case "structure_carlsbad": return "lean into queenside pressure";
+	case "structure_closed_center": return "switch play to the wing";
+	case "structure_benoni": return "use space and outposts";
+	case "structure_colour_complex": return "press the weak colour complex";
 	case "defense":
 	case "escape_check": return "stabilize the position";
 	case "simplify": return "simplify into a cleaner position";
@@ -2213,6 +2914,8 @@ function explainMove({node, info, bestInfo, secondInfo, infoList}, internal = fa
 	let before_profile = strategic_profile(board, mover);
 	let immediate_after_profile = strategic_profile(board_after, mover);
 	let current_line = line_features(board, info);
+	let immediate_tactics = current_line.tactics || [];
+	let immediate_structure = current_line.structure || null;
 
 	if (mate) {
 		push_theme(themes, raw_tags, seen, "It starts a forcing mating sequence.", null, "mate");
@@ -2232,6 +2935,9 @@ function explainMove({node, info, bestInfo, secondInfo, infoList}, internal = fa
 		} else {
 			push_theme(themes, raw_tags, seen, "It wins material by capturing a {piece}.", {piece: piece_name(capture.piece)}, "capture");
 		}
+	}
+	for (let motif of immediate_tactics.slice(0, 2)) {
+		push_theme(themes, raw_tags, seen, motif.key, motif.args, motif.tag);
 	}
 	if (save_piece) {
 		push_theme(themes, raw_tags, seen, "It moves a loose piece away from danger and reduces tactical risk.", null, "save_piece");
@@ -2292,6 +2998,9 @@ function explainMove({node, info, bestInfo, secondInfo, infoList}, internal = fa
 	}
 	if ((moved === "B" || moved === "b" || moved === "P" || moved === "p") && immediate_after_profile.bishop.score >= before_profile.bishop.score + 0.4) {
 		push_theme(themes, raw_tags, seen, "It improves the bishop relative to the pawn chain, so the minor pieces fit the structure better.", null, "bishop_quality");
+	}
+	if (immediate_structure && immediate_structure.name && immediate_structure.score >= 0.7 && immediate_structure.theme_key) {
+		push_theme(themes, raw_tags, seen, immediate_structure.theme_key, null, immediate_structure.tag);
 	}
 	if (simplifies_ahead(best_value, capture)) {
 		push_theme(themes, raw_tags, seen, "With the better position, it simplifies into a cleaner game.", null, "simplify");
@@ -2524,7 +3233,7 @@ function make_translate_helper(translate_fn) {
 function learning_status_for_explanation(explanation) {
 	let tags = new Set(explanation.raw_tags || []);
 	let delta = typeof explanation.delta_from_best === "number" ? explanation.delta_from_best : null;
-	let positive_tags = ["development", "center_pawn", "castle", "save_piece", "threat", "open_file", "half_open_file", "passed_pawn", "king_activity", "simplify", "defense", "pawn_structure", "outpost", "bishop_quality", "knight_quality", "endgame_direction"];
+	let positive_tags = ["development", "center_pawn", "castle", "save_piece", "threat", "open_file", "half_open_file", "passed_pawn", "king_activity", "simplify", "defense", "pawn_structure", "outpost", "bishop_quality", "knight_quality", "endgame_direction", "fork", "pin", "skewer", "discovered_attack", "back_rank", "trapped_piece", "structure_iqp", "structure_hanging_pawns", "structure_carlsbad", "structure_closed_center", "structure_benoni", "structure_colour_complex"];
 	let severe_tags = ["early_king", "queen_early"];
 
 	if (explanation.touched) {

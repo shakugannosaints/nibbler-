@@ -230,6 +230,90 @@ let cases = [
 		min_coach_notes: 1,
 		min_why_not: 1
 	},
+	{
+		name: "fork",
+		fen: "4k3/5q2/8/8/4N3/8/8/4K3 w - - 0 1",
+		nodeMove: null,
+		info: make_info("e4d6", ["e4d6", "e8f8", "d6f7"], 210),
+		best: make_info("e4d6", ["e4d6", "e8f8", "d6f7"], 210),
+		second: make_info("e4g5", ["e4g5", "f7g6", "g5f7"], 64),
+		expected_tags: ["fork"],
+		expected_metric_labels: ["Tactics"],
+		min_coach_notes: 1,
+		min_why_not: 1
+	},
+	{
+		name: "pin",
+		fen: "r1bqk1nr/ppp1pppp/2n5/8/8/8/PPPPPPPP/RNBQKB1R w KQkq - 0 1",
+		nodeMove: null,
+		info: make_info("f1b5", ["f1b5", "g8f6", "b1c3"], 58),
+		best: make_info("f1b5", ["f1b5", "g8f6", "b1c3"], 58),
+		second: make_info("b1c3", ["b1c3", "g8f6", "f1b5"], 28),
+		expected_tags: ["pin"],
+		expected_metric_labels: ["Tactics"],
+		min_coach_notes: 1,
+		min_why_not: 1
+	},
+	{
+		name: "iqp_structure",
+		fen: "rnbqkbnr/pppppppp/8/8/3P4/8/PP3PPP/RNBQKBNR w KQkq - 0 1",
+		nodeMove: null,
+		info: make_info("g1f3", ["g1f3", "g8f6", "b1c3"], 26),
+		best: make_info("g1f3", ["g1f3", "g8f6", "b1c3"], 26),
+		second: make_info("a2a3", ["a2a3", "g8f6", "g1f3"], 4),
+		expected_tags: ["structure_iqp"],
+		expected_metric_labels: ["Structure / plan"],
+		min_coach_notes: 1,
+		min_why_not: 1
+	},
+	{
+		name: "hanging_pawns",
+		fen: "rnbqkbnr/pppppppp/8/8/2PP4/8/P1PP1PPP/RNBQKBNR w KQkq - 0 1",
+		nodeMove: null,
+		info: make_info("g1f3", ["g1f3", "g8f6", "b1c3"], 24),
+		best: make_info("g1f3", ["g1f3", "g8f6", "b1c3"], 24),
+		second: make_info("a2a3", ["a2a3", "g8f6", "g1f3"], 6),
+		expected_tags: ["structure_hanging_pawns"],
+		expected_metric_labels: ["Structure / plan"],
+		min_coach_notes: 1,
+		min_why_not: 1
+	},
+	{
+		name: "carlsbad_plan",
+		fen: "rnbqkbnr/pp1ppppp/2p5/3p4/3P4/8/PP3PPP/RNBQKBNR w KQkq - 0 1",
+		nodeMove: null,
+		info: make_info("b2b4", ["b2b4", "g8f6", "b4b5"], 22),
+		best: make_info("b2b4", ["b2b4", "g8f6", "b4b5"], 22),
+		second: make_info("g1f3", ["g1f3", "g8f6", "b2b4"], 10),
+		expected_tags: ["structure_carlsbad"],
+		expected_metric_labels: ["Structure / plan"],
+		min_coach_notes: 1,
+		min_why_not: 1
+	},
+	{
+		name: "closed_center_plan",
+		fen: "rnbqkbnr/pppp1ppp/8/3pp3/3PP3/8/PPP2PPP/RNBQKBNR w KQkq - 0 1",
+		nodeMove: null,
+		info: make_info("f2f4", ["f2f4", "e5f4", "g1f3"], 18),
+		best: make_info("f2f4", ["f2f4", "e5f4", "g1f3"], 18),
+		second: make_info("g1f3", ["g1f3", "g8f6", "f2f4"], 8),
+		expected_tags: ["structure_closed_center"],
+		expected_metric_labels: ["Structure / plan"],
+		min_coach_notes: 1,
+		min_why_not: 1
+	},
+	{
+		name: "benoni_plan",
+		fen: "rnbqkbnr/pp1p1ppp/4p3/2pP4/8/8/PPP1PPPP/RNBQKBNR w KQkq - 0 1",
+		nodeMove: null,
+		info: make_info("e2e4", ["e2e4", "d7d6", "g1f3"], 20),
+		best: make_info("e2e4", ["e2e4", "d7d6", "g1f3"], 20),
+		second: make_info("g1f3", ["g1f3", "g8f6", "e2e4"], 12),
+		expected_tags: ["structure_benoni"],
+		expected_metric_labels: ["Structure / plan"],
+		min_coach_notes: 1,
+		min_why_not: 1
+	},
 ];
 
 function assert_no_placeholders(s, label) {
@@ -304,6 +388,11 @@ for (let language of ["English", "\u7b80\u4f53\u4e2d\u6587", "\u7e41\u9ad4\u4e2d
 			for (let label of ["Pawn structure", "Squares", "Minor pieces", "Endgame"].map(translate)) {
 				if (!metric_labels.has(label)) {
 					throw new Error(`Missing long-term metric ${label} for ${sample.name} in ${language}`);
+				}
+			}
+			for (let label of (sample.expected_metric_labels || []).map(translate)) {
+				if (!metric_labels.has(label)) {
+					throw new Error(`Missing expected metric ${label} for ${sample.name} in ${language}`);
 				}
 			}
 		}

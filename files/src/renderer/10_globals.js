@@ -12,6 +12,7 @@ const fenbox = document.getElementById("fenbox");
 const graph = document.getElementById("graph");
 const rightgridder = document.getElementById("rightgridder");
 const infobox = document.getElementById("infobox");
+const explainbox = document.getElementById("explainbox");
 const movelist = document.getElementById("movelist");
 const fullbox = document.getElementById("fullbox");
 const fullbox_content = document.getElementById("fullbox_content");

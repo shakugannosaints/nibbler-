@@ -1,6 +1,7 @@
 "use strict";
 
 const translations = require("./translations");
+const explanation_translations = require("./explanation_translations");
 
 let startup_language = null;
 
@@ -19,6 +20,8 @@ exports.translate = function(key, force_language = null) {
 
 	if (translations[language] && translations[language][key]) {
 		return translations[language][key];
+	} else if (explanation_translations[language] && explanation_translations[language][key]) {
+		return explanation_translations[language][key];
 	} else {
 		return key;
 	}
@@ -29,4 +32,3 @@ exports.t = exports.translate;
 exports.all_languages = function() {
 	return Object.keys(translations);
 }
-

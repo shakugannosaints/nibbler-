@@ -9,6 +9,8 @@ let infobox_props = {
 		if (this.displaying_error_log()) {
 			infobox.innerHTML = this.error_log;
 			this.last_drawn_version = null;
+			this.info_line_moves = [];
+			this.info_line_moves_node_id = null;
 			return;
 		}
 
@@ -117,12 +119,15 @@ let infobox_props = {
 
 		this.info_clickers = [];
 		this.info_clickers_node_id = node.id;
+		this.info_line_moves = [];
+		this.info_line_moves_node_id = node.id;
 
 		let substrings = [];
 		let clicker_index = 0;
 		let div_index = 0;
 
 		for (let info of info_list) {
+			this.info_line_moves.push(info.move);
 
 			// The div containing the PV etc...
 
@@ -267,6 +272,7 @@ let infobox_props = {
 
 	must_draw_infobox: function() {
 		this.last_drawn_version = null;
+		this.must_draw_explainbox();
 	},
 
 	clickers_are_valid_for_node: function(node) {

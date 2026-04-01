@@ -71,14 +71,17 @@ function SearchParams(node = null, limit = null, limit_by_time = false, searchmo
 	});
 }
 
-function NewEngine(hub) {
+function NewEngine(hub, options = null) {
 
 	let eng = Object.create(null);
+	let opts = (typeof options === "object" && options !== null) ? options : Object.create(null);
 
 	eng.hub = hub;
 	eng.exe = null;
 	eng.scanner = null;
 	eng.err_scanner = null;
+	eng.suppress_acks = !!opts.suppress_acks;
+	eng.always_use_searchmoves = !!opts.always_use_searchmoves;
 
 	eng.filepath = "";					// Used to decide what entry in engineconfig to use. Start as "", which has defaults for the dummy engine.
 
@@ -204,7 +207,7 @@ function NewEngine(hub) {
 			s = `go nodes ${n}`;
 		}
 
-		if (config.searchmoves_buttons && this.search_desired.searchmoves.length > 0) {
+		if ((this.always_use_searchmoves || config.searchmoves_buttons) && this.search_desired.searchmoves.length > 0) {
 			s += " searchmoves";
 			for (let move of this.search_desired.searchmoves) {
 				s += " " + move;
@@ -357,6 +360,9 @@ function NewEngine(hub) {
 	};
 
 	eng.send_ack_setoption = function(name) {
+		if (this.suppress_acks) {
+			return null;
+		}
 		let key = name.toLowerCase();																// Keys are always stored in lowercase.
 		let val = typeof this.sent_options[key] === "string" ? this.sent_options[key] : "";			// Values are strings, if present
 		let o = {key, val};
@@ -373,6 +379,9 @@ function NewEngine(hub) {
 	};
 
 	eng.send_ack_engine = function() {
+		if (this.suppress_acks) {
+			return;
+		}
 		ipcRenderer.send("ack_engine", this.filepath);
 	};
 

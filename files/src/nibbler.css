@@ -41,11 +41,24 @@ body {
 	margin: 1em 0 0 0;
 	height: 0;							/* js needs to keep this equal to the boardsize */
 	grid-template-columns: none;
-	grid-template-rows: min-content 1fr min-content;
+	grid-template-rows: min-content minmax(0, 1fr) min-content;
 	grid-template-areas:
 		"c"
 		"d"
 		"e";
+}
+
+#rightgridder.with-explainbox {
+	grid-template-rows: min-content minmax(0, 1.15fr) minmax(0, 0.9fr) min-content;
+	grid-template-areas:
+		"c"
+		"d"
+		"x"
+		"e";
+}
+
+#rightgridder.with-explainbox.explainbox-expanded {
+	grid-template-rows: min-content minmax(0, 0.72fr) minmax(0, 1.38fr) min-content;
 }
 
 #boardsquares {
@@ -95,11 +108,29 @@ body {
 	display: block;
 	color: #cccccc;						/* only used for Lc0 stderr output at startup */
 	font-family: monospace, monospace;
+	min-height: 0;
 	overflow-x: hidden;
 	overflow-y: auto;
 	padding-right: 10px;				/* so the text doesn't get so near the scroll bar */
 	pointer-events: auto;
 	white-space: pre-wrap;
+}
+
+#explainbox {
+	grid-area: x;
+	display: none;
+	font-family: monospace, monospace;
+	min-height: 0;
+	margin: 0.75em 1em 0 1em;
+	overflow-x: hidden;
+	overflow-y: auto;
+	padding-right: 10px;
+	pointer-events: auto;
+	white-space: normal;
+}
+
+#rightgridder.with-explainbox #explainbox {
+	display: block;
 }
 
 #graph {
@@ -172,6 +203,18 @@ input[type=text]:focus {
 	white-space: pre;
 }
 
+#fullbox.fullbox_explanation_mode {
+	background-color: rgba(8, 8, 8, 0.96);
+}
+
+#fullbox_content.fullbox_content_explanation {
+	box-sizing: border-box;
+	margin: 0 auto;
+	max-width: min(1180px, 96vw);
+	padding: 1.1em 1.2em 1.6em 1.2em;
+	white-space: normal;
+}
+
 #config_item_input {
 	background: #101010;
 	border: 1px solid #444444;
@@ -238,6 +281,145 @@ ul {
 
 .infoline {
 	margin-bottom: 1em;
+}
+
+.explainbox_card {
+	background-color: #101010;
+	border-top: 1px solid #222222;
+	padding: 0 0 0.25em 0;
+}
+
+.explainbox_topbar {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	background-color: #101010;
+	border-bottom: 1px solid #1f1f1f;
+	padding: 0.85em 0 0.7em 0;
+}
+
+.explainbox_header {
+	display: flex;
+	justify-content: space-between;
+	gap: 1em;
+	margin-bottom: 0.35em;
+}
+
+.explainbox_actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.8em;
+	margin: 0 0 0.55em 0;
+}
+
+.explainbox_action {
+	cursor: pointer;
+	pointer-events: auto;
+	user-select: none;
+}
+
+.explainbox_action:hover {
+	text-decoration: underline;
+}
+
+.explainbox_move {
+	font-size: 1.1em;
+	margin-bottom: 0.2em;
+}
+
+.explainbox_meta {
+	margin-bottom: 0.85em;
+}
+
+.explainbox_note {
+	line-height: 1.35;
+	margin-bottom: 0.75em;
+}
+
+.explainbox_summary {
+	line-height: 1.45;
+	margin: 0.85em 0 0.7em 0;
+}
+
+.explainbox_section_title {
+	margin-bottom: 0.35em;
+}
+
+.explainbox_section {
+	background-color: #0d0d0d;
+	border: 1px solid #1e1e1e;
+	border-radius: 6px;
+	margin: 0 0 0.65em 0;
+	overflow: hidden;
+}
+
+.explainbox_section_summary {
+	cursor: default;
+	padding: 0.55em 0.7em 0.3em 0.7em;
+	background-color: #141414;
+	border-bottom: 1px solid #1e1e1e;
+}
+
+.explainbox_section_summary::before {
+	color: #777777;
+	content: "▸";
+	display: inline-block;
+	margin-right: 0.45em;
+	transition: transform 0.12s ease;
+}
+
+.explainbox_section[open] .explainbox_section_summary {
+	border-bottom-color: #1e1e1e;
+}
+
+.explainbox_section[open] .explainbox_section_summary::before {
+	transform: rotate(90deg);
+}
+
+.explainbox_section_body {
+	padding: 0.55em 0.7em 0.15em 0.7em;
+}
+
+.explainbox_section_summary::before {
+	content: none;
+	margin-right: 0;
+	transition: none;
+}
+
+.explainbox_item {
+	line-height: 1.45;
+	margin-bottom: 0.4em;
+}
+
+.explainbox_fullbox_shell {
+	margin: 0 auto;
+	max-width: 1020px;
+}
+
+.explainbox_fullbox_toolbar {
+	align-items: center;
+	background-color: #080808;
+	border-bottom: 1px solid #1f1f1f;
+	display: flex;
+	justify-content: space-between;
+	margin-bottom: 0.8em;
+	padding: 0.2em 0 0.8em 0;
+	position: sticky;
+	top: 0;
+	z-index: 2;
+}
+
+.explainbox_fullbox_body {
+	max-height: calc(100vh - 5.2em);
+	overflow-y: auto;
+	padding-right: 0.45em;
+}
+
+.explainbox_card_fullbox {
+	background-color: #101010;
+	border: 1px solid #1e1e1e;
+	border-radius: 10px;
+	padding: 0 0.95em 0.4em 0.95em;
 }
 
 .enginechooser {

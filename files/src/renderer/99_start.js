@@ -42,6 +42,7 @@ boardfriends.width = canvas.width = boardsquares.width = config.board_size;
 boardfriends.height = canvas.height = boardsquares.height = config.board_size;
 
 rightgridder.style["height"] = `${canvas.height}px`;
+hub.sync_explanation_panel_visibility();
 
 // Set up the squares in both tables. Note that, upon flips, the elements
 // themselves are moved to their new position, so everything works, e.g.
@@ -71,6 +72,7 @@ for (let y = 0; y < 8; y++) {
 
 statusbox.style["font-size"] = config.info_font_size.toString() + "px";
 infobox.style["font-size"] = config.info_font_size.toString() + "px";
+explainbox.style["font-size"] = config.info_font_size.toString() + "px";
 fullbox.style["font-size"] = config.info_font_size.toString() + "px";
 movelist.style["font-size"] = config.pgn_font_size.toString() + "px";
 fenbox.style["font-size"] = config.fen_font_size.toString() + "px";
@@ -166,6 +168,18 @@ infobox.addEventListener("mousedown", (event) => {
 	hub.infobox_click(event);
 });
 
+explainbox.addEventListener("mousedown", (event) => {
+	hub.explainbox_click(event);
+});
+
+explainbox.addEventListener("mouseenter", () => {
+	hub.set_explanation_panel_hovered(true);
+});
+
+explainbox.addEventListener("mouseleave", () => {
+	hub.set_explanation_panel_hovered(false);
+});
+
 movelist.addEventListener("mousedown", (event) => {
 	hub.movelist_click(event);
 });
@@ -247,6 +261,11 @@ fenbox.addEventListener("keydown", (event) => {
 // Set space-bar to toggle go/halt, unless we're in the FEN box...
 
 window.addEventListener("keydown", (event) => {
+	if (event.key === "Escape" && fullbox.style.display !== "none") {
+		hub.hide_fullbox();
+		return;
+	}
+
 	if (event.key === " ") {
 		let ae = document.activeElement;
 		if (ae.tagName !== "INPUT" && ae.tagName !== "TEXTAREA" && !ae.isContentEditable) {

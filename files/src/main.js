@@ -60,6 +60,12 @@ let have_received_terminate = false;
 let loaded_engine = "";
 let loaded_weights = "";
 let loaded_evalfile = "";
+let explanation_win = null;
+let latest_explanation_popup_payload = {
+	title: translate.t("Move explanation"),
+	html: ""
+};
+let desired_zoomfactor_global = 1;
 
 let have_warned_hw_accel_setting = false;
 
@@ -79,6 +85,7 @@ if (electron.app.isReady()) {
 function startup() {
 
 	let desired_zoomfactor = 1 / electron.screen.getPrimaryDisplay().scaleFactor;
+	desired_zoomfactor_global = desired_zoomfactor;
 
 	win = new electron.BrowserWindow({
 		width: config.width,
@@ -136,6 +143,9 @@ function startup() {
 	});
 
 	electron.ipcMain.on("terminate", () => {
+		if (explanation_win && !explanation_win.isDestroyed()) {
+			explanation_win.destroy();
+		}
 		have_received_terminate = true;					// Needed so the "close" handler (see above) knows to allow it.
 		win.close();
 	});
@@ -187,6 +197,29 @@ function startup() {
 
 	electron.ipcMain.on("web_link", (event, msg) => {
 		electron.shell.openExternal(msg);
+	});
+
+	electron.ipcMain.on("show_explanation_popup", () => {
+		show_explanation_popup();
+	});
+
+	electron.ipcMain.on("update_explanation_popup", (event, payload) => {
+		if (payload && typeof payload === "object") {
+			latest_explanation_popup_payload = {
+				title: typeof payload.title === "string" && payload.title ? payload.title : translate.t("Move explanation"),
+				html: typeof payload.html === "string" ? payload.html : ""
+			};
+		}
+		send_explanation_popup_payload();
+	});
+
+	electron.ipcMain.on("explanation_popup_hover", (event, hovered) => {
+		if (win && !win.isDestroyed()) {
+			win.webContents.send("call", {
+				fn: "set_explanation_popup_hovered",
+				args: [!!hovered]
+			});
+		}
 	});
 
 	electron.ipcMain.on("ack_engine", (event, msg) => {
@@ -330,6 +363,91 @@ function startup() {
 		path.join(__dirname, "nibbler.html"),
 		{query: query}
 	);
+}
+
+function show_explanation_popup() {
+
+	if (explanation_win && !explanation_win.isDestroyed()) {
+		explanation_win.show();
+		raise_explanation_popup();
+		send_explanation_popup_open_state(true);
+		send_explanation_popup_payload();
+		return;
+	}
+
+	explanation_win = new electron.BrowserWindow({
+		width: 620,
+		height: 860,
+		minWidth: 420,
+		minHeight: 320,
+		backgroundColor: "#080808",
+		resizable: true,
+		show: false,
+		alwaysOnTop: true,
+		autoHideMenuBar: true,
+		webPreferences: {
+			contextIsolation: false,
+			nodeIntegration: true,
+			spellcheck: false,
+			zoomFactor: desired_zoomfactor_global
+		}
+	});
+
+	explanation_win.once("ready-to-show", () => {
+		try {
+			explanation_win.webContents.setZoomFactor(desired_zoomfactor_global);
+		} catch (err) {
+			explanation_win.webContents.zoomFactor = desired_zoomfactor_global;
+		}
+		explanation_win.show();
+		raise_explanation_popup();
+		send_explanation_popup_open_state(true);
+		send_explanation_popup_payload();
+	});
+
+	explanation_win.on("focus", () => {
+		raise_explanation_popup();
+	});
+
+	explanation_win.on("closed", () => {
+		send_explanation_popup_open_state(false);
+		explanation_win = null;
+	});
+
+	explanation_win.loadFile(path.join(__dirname, "explanation_popup.html"));
+}
+
+function send_explanation_popup_payload() {
+	if (!explanation_win || explanation_win.isDestroyed()) {
+		return;
+	}
+
+	let title = latest_explanation_popup_payload.title || translate.t("Move explanation");
+	explanation_win.setTitle(title);
+	explanation_win.webContents.send("set_explanation_popup", latest_explanation_popup_payload);
+}
+
+function raise_explanation_popup() {
+	if (!explanation_win || explanation_win.isDestroyed()) {
+		return;
+	}
+
+	explanation_win.setAlwaysOnTop(true, "floating");
+	if (typeof explanation_win.moveTop === "function") {
+		explanation_win.moveTop();
+	}
+	explanation_win.focus();
+}
+
+function send_explanation_popup_open_state(state) {
+	if (!win || win.isDestroyed()) {
+		return;
+	}
+
+	win.webContents.send("call", {
+		fn: "set_explanation_popup_open",
+		args: [!!state]
+	});
 }
 
 function menu_build() {
@@ -1483,6 +1601,17 @@ function menu_build() {
 						win.webContents.send("call", {
 							fn: "toggle",
 							args: ["infobox_pv_move_numbers"],
+						});
+					}
+				},
+				{
+					label: translate.t("Show move explanation panel"),
+					type: "checkbox",
+					checked: config.show_explanation_panel,
+					click: () => {
+						win.webContents.send("call", {
+							fn: "toggle",
+							args: ["show_explanation_panel"],
 						});
 					}
 				},

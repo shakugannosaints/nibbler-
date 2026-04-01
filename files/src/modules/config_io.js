@@ -93,6 +93,13 @@ exports.defaults = {
 	"show_wdl": true,
 	"infobox_stats_newline": false,
 	"infobox_pv_move_numbers": false,
+	"show_explanation_panel": true,
+	"hover_eval_enabled": true,
+	"hover_eval_delay_ms": 220,
+	"hover_eval_movetime_ms": 250,
+	"hover_eval_threads": 1,
+	"hover_eval_hash_mb": 64,
+	"hover_eval_cache_limit": 400,
 	"hover_draw": false,
 	"hover_method": 2,
 

@@ -1,0 +1,1977 @@
+"use strict";
+
+const piece_values = Object.freeze({
+	p: 1,
+	n: 3,
+	b: 3,
+	r: 5,
+	q: 9,
+	k: 100
+});
+
+const central_core = new Set(["d4", "e4", "d5", "e5"]);
+const central_space = new Set(["c3", "d3", "e3", "f3", "c4", "d4", "e4", "f4", "c5", "d5", "e5", "f5", "c6", "d6", "e6", "f6"]);
+const minor_home_squares = new Set(["b1", "g1", "c1", "f1", "b8", "g8", "c8", "f8"]);
+
+function square_to_point(square) {
+	if (typeof square !== "string" || square.length !== 2) {
+		return null;
+	}
+
+	let file = square.charCodeAt(0) - 97;
+	let rank = square.charCodeAt(1) - 49;
+
+	if (file < 0 || file > 7 || rank < 0 || rank > 7) {
+		return null;
+	}
+
+	return {
+		x: file,
+		y: 7 - rank,
+		s: square
+	};
+}
+
+function point_to_square(x, y) {
+	return String.fromCharCode(97 + x) + (8 - y).toString();
+}
+
+function source_square(move) {
+	return square_to_point(typeof move === "string" ? move.slice(0, 2) : "");
+}
+
+function destination_square(move) {
+	return square_to_point(typeof move === "string" ? move.slice(2, 4) : "");
+}
+
+function in_bounds(x, y) {
+	return x >= 0 && x < 8 && y >= 0 && y < 8;
+}
+
+function opposite_colour(colour) {
+	return colour === "w" ? "b" : "w";
+}
+
+function piece_colour(piece) {
+	if (!piece) {
+		return "";
+	}
+	return piece === piece.toUpperCase() ? "w" : "b";
+}
+
+function piece_name(piece) {
+	switch ((piece || "").toLowerCase()) {
+	case "p": return "pawn";
+	case "n": return "knight";
+	case "b": return "bishop";
+	case "r": return "rook";
+	case "q": return "queen";
+	case "k": return "king";
+	default: return "piece";
+	}
+}
+
+function piece_value(piece) {
+	return piece_values[(piece || "").toLowerCase()] || 0;
+}
+
+function moved_piece(board, move) {
+	return board.piece(source_square(move));
+}
+
+function is_castling_move(board, move) {
+	let source = source_square(move);
+	let dest = destination_square(move);
+	let piece = board.piece(source);
+
+	if (!source || !dest || !piece) {
+		return false;
+	}
+
+	return ["K", "k"].includes(piece) && board.same_colour(source, dest);
+}
+
+function landing_square(board, move) {
+	let source = source_square(move);
+	let dest = destination_square(move);
+
+	if (!source || !dest) {
+		return dest;
+	}
+
+	if (is_castling_move(board, move)) {
+		return {
+			x: dest.x > source.x ? 6 : 2,
+			y: source.y,
+			s: point_to_square(dest.x > source.x ? 6 : 2, source.y)
+		};
+	}
+
+	return dest;
+}
+
+function capture_info(board, move) {
+	let source = source_square(move);
+	let dest = destination_square(move);
+	let piece = board.piece(source);
+
+	if (!source || !dest || !piece || is_castling_move(board, move)) {
+		return null;
+	}
+
+	let captured = board.piece(dest);
+
+	if (captured) {
+		return {
+			piece: captured,
+			square: dest.s
+		};
+	}
+
+	if ((piece === "P" || piece === "p") && source.x !== dest.x) {
+		return {
+			piece: piece === "P" ? "p" : "P",
+			square: point_to_square(dest.x, source.y)
+		};
+	}
+
+	return null;
+}
+
+function score_value(info) {
+	if (!info) {
+		return 0;
+	}
+
+	if (typeof info.mate === "number" && info.mate !== 0) {
+		if (info.mate > 0) {
+			return 30000 - info.mate;
+		}
+		return -30000 - info.mate;
+	}
+
+	if (typeof info.cp === "number") {
+		return info.cp;
+	}
+
+	if (typeof info.q === "number") {
+		return Math.round(info.q * 1000);
+	}
+
+	return 0;
+}
+
+function format_eval_text(info) {
+	if (!info || !info.__touched) {
+		return {
+			key: "?",
+			args: null
+		};
+	}
+
+	if (typeof info.mate === "number" && info.mate !== 0) {
+		if (info.mate > 0) {
+			return {
+				key: "Mate in {n}",
+				args: {n: info.mate.toString()}
+			};
+		}
+
+		return {
+			key: "Mated in {n}",
+			args: {n: Math.abs(info.mate).toString()}
+		};
+	}
+
+	let cp = typeof info.cp === "number" ? info.cp : 0;
+	let pawns = (cp / 100).toFixed(2);
+
+	if (cp > 0) {
+		pawns = "+" + pawns;
+	}
+
+	return {
+		key: pawns,
+		args: null
+	};
+}
+
+function format_delta_text(best_info, info) {
+	if (!best_info || !info || !best_info.__touched || !info.__touched) {
+		return "?";
+	}
+
+	if ((best_info.mate || 0) !== 0 || (info.mate || 0) !== 0) {
+		if ((best_info.mate || 0) > 0 && (info.mate || 0) <= 0) {
+			return "a forced mating attack";
+		}
+		if ((best_info.mate || 0) < 0 && (info.mate || 0) >= 0) {
+			return "the line that avoids immediate mate";
+		}
+		return "the mating sequence";
+	}
+
+	return "{value} pawns";
+}
+
+function format_delta_args(best_info, info) {
+	if (!best_info || !info || !best_info.__touched || !info.__touched) {
+		return null;
+	}
+
+	if ((best_info.mate || 0) !== 0 || (info.mate || 0) !== 0) {
+		return null;
+	}
+
+	let diff = Math.abs(score_value(best_info) - score_value(info)) / 100;
+	return {delta: diff.toFixed(diff >= 1 ? 1 : 2)};
+}
+
+function nice_pv(board, info) {
+	let ret = [];
+	let temp = board;
+
+	for (let move of Array.isArray(info.pv) ? info.pv : [info.move]) {
+		ret.push(temp.nice_string(move));
+		temp = temp.move(move);
+	}
+
+	return ret;
+}
+
+function non_pawn_material(board, colour = null) {
+	let total = 0;
+
+	for (let x = 0; x < 8; x++) {
+		for (let y = 0; y < 8; y++) {
+			let piece = board.state[x][y];
+			if (!piece || ["P", "p", "K", "k"].includes(piece)) {
+				continue;
+			}
+			if (colour && piece_colour(piece) !== colour) {
+				continue;
+			}
+			total += piece_value(piece);
+		}
+	}
+
+	return total;
+}
+
+function is_endgame(board) {
+	return non_pawn_material(board) <= 12;
+}
+
+function opening_phase(board) {
+	return board.fullmove <= 10 && non_pawn_material(board) >= 40;
+}
+
+function has_castling_rights(board, colour) {
+	let rights = colour === "w" ? ["A", "B", "C", "D", "E", "F", "G", "H"] : ["a", "b", "c", "d", "e", "f", "g", "h"];
+	return rights.some(ch => board.castling.includes(ch));
+}
+
+function center_distance(point) {
+	if (!point) {
+		return 100;
+	}
+	return Math.abs(point.x - 3.5) + Math.abs(point.y - 3.5);
+}
+
+function is_development_move(board, move) {
+	let piece = moved_piece(board, move);
+	let source = source_square(move);
+	let dest = landing_square(board, move);
+
+	if (!source || !dest || !piece) {
+		return false;
+	}
+
+	if (!["N", "n", "B", "b"].includes(piece)) {
+		return false;
+	}
+
+	if (!minor_home_squares.has(source.s)) {
+		return false;
+	}
+
+	return dest.s !== source.s;
+}
+
+function development_supports_castling(board, move) {
+	if (!is_development_move(board, move)) {
+		return false;
+	}
+
+	let colour = board.active;
+	if (colour === "w") {
+		return board.castling.includes("A") || board.castling.includes("H");
+	}
+	return board.castling.includes("a") || board.castling.includes("h");
+}
+
+function central_pawn_info(board, move) {
+	let piece = moved_piece(board, move);
+	let source = source_square(move);
+	let dest = landing_square(board, move);
+
+	if (!source || !dest || (piece !== "P" && piece !== "p")) {
+		return null;
+	}
+
+	let is_capture = capture_info(board, move) !== null;
+	if (is_capture) {
+		return null;
+	}
+
+	if (central_core.has(dest.s)) {
+		return {kind: "core"};
+	}
+
+	if (central_space.has(dest.s)) {
+		return {kind: "space"};
+	}
+
+	return null;
+}
+
+function early_king_move_info(board, board_after, move) {
+	let piece = moved_piece(board, move);
+
+	if (!["K", "k"].includes(piece) || is_castling_move(board, move) || is_endgame(board) || !opening_phase(board)) {
+		return null;
+	}
+
+	return {
+		loses_castling: has_castling_rights(board, board.active) && !has_castling_rights(board_after, board.active)
+	};
+}
+
+function early_queen_move_info(board, move) {
+	let piece = moved_piece(board, move);
+	let source = source_square(move);
+
+	if (!source || !["Q", "q"].includes(piece) || !opening_phase(board)) {
+		return null;
+	}
+
+	if ((piece === "Q" && source.s === "d1") || (piece === "q" && source.s === "d8")) {
+		return {source: source.s};
+	}
+
+	return null;
+}
+
+function slow_opening_move_info(board, move, capture, threat, central_pawn) {
+	let piece = moved_piece(board, move);
+	let dest = landing_square(board, move);
+
+	if (!piece || !dest || !opening_phase(board) || capture || threat || central_pawn || is_castling_move(board, move) || is_development_move(board, move)) {
+		return null;
+	}
+
+	if (piece === "P" || piece === "p") {
+		if (["a", "b", "g", "h"].includes(dest.s[0])) {
+			return {file: dest.s[0]};
+		}
+	}
+
+	return null;
+}
+
+function rook_file_state(board_after, move) {
+	let target = destination_square(move);
+	let piece = board_after.piece(target);
+
+	if (!target || (piece !== "R" && piece !== "r")) {
+		return null;
+	}
+
+	let own_pawns = 0;
+	let enemy_pawns = 0;
+	let rook_colour = board_after.colour(target);
+
+	for (let y = 0; y < 8; y++) {
+		let current = board_after.state[target.x][y];
+		if (current === "") {
+			continue;
+		}
+		if (current === "P" || current === "p") {
+			if (piece_colour(current) === rook_colour) {
+				own_pawns++;
+			} else {
+				enemy_pawns++;
+			}
+		}
+	}
+
+	if (own_pawns === 0 && enemy_pawns === 0) {
+		return "open";
+	}
+	if (own_pawns === 0 && enemy_pawns > 0) {
+		return "half-open";
+	}
+	return null;
+}
+
+function is_passed_pawn(board_after, move) {
+	let target = destination_square(move);
+	let piece = board_after.piece(target);
+
+	if (!target || (piece !== "P" && piece !== "p")) {
+		return false;
+	}
+
+	let enemy_pawn = piece === "P" ? "p" : "P";
+	let step = piece === "P" ? -1 : 1;
+
+	for (let dx = -1; dx <= 1; dx++) {
+		let x = target.x + dx;
+		if (!in_bounds(x, target.y)) {
+			continue;
+		}
+
+		for (let y = target.y + step; in_bounds(x, y); y += step) {
+			if (board_after.state[x][y] === enemy_pawn) {
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+function king_checked_after(board_after, mover_colour) {
+	let king_char = mover_colour === "w" ? "k" : "K";
+	let king_square = board_after.find(king_char)[0];
+
+	if (!king_square) {
+		return false;
+	}
+
+	return board_after.attacked(king_square, board_after.colour(king_square));
+}
+
+function fresh_attack_target(board, board_after) {
+	let mover_colour = board.active;
+	let enemy_colour = opposite_colour(mover_colour);
+	let enemy_king = mover_colour === "w" ? "k" : "K";
+	let best = null;
+
+	for (let x = 0; x < 8; x++) {
+		for (let y = 0; y < 8; y++) {
+			let piece = board_after.state[x][y];
+			let square = {x, y, s: point_to_square(x, y)};
+
+			if (!piece || piece === enemy_king || board_after.colour(square) !== enemy_colour) {
+				continue;
+			}
+
+			let attacked_before = board.attacked(square, enemy_colour);
+			let attacked_after = board_after.attacked(square, enemy_colour);
+
+			if (!attacked_after || attacked_before) {
+				continue;
+			}
+
+			let defended_after = board_after.attacked(square, mover_colour);
+			let score = piece_value(piece) * 10 + (defended_after ? 0 : 3);
+
+			if (!best || score > best.score) {
+				best = {
+					piece,
+					square: square.s,
+					undefended: !defended_after,
+					score
+				};
+			}
+		}
+	}
+
+	return best;
+}
+
+function save_piece_info(board, board_after, move) {
+	let source = source_square(move);
+	let dest = landing_square(board, move);
+	let piece = board.piece(source);
+
+	if (!source || !dest || !piece || ["K", "k"].includes(piece)) {
+		return null;
+	}
+
+	let mover_colour = board.active;
+	let enemy_colour = opposite_colour(mover_colour);
+	let source_attacked = board.attacked(source, mover_colour);
+	let dest_attacked = board_after.attacked(dest, mover_colour);
+	let dest_defended = board_after.attacked(dest, enemy_colour);
+
+	if (!source_attacked) {
+		return null;
+	}
+
+	if (!dest_attacked || dest_defended) {
+		return {
+			piece,
+			destination: dest.s
+		};
+	}
+
+	return null;
+}
+
+function king_activity_info(board, move) {
+	let source = source_square(move);
+	let dest = landing_square(board, move);
+	let piece = moved_piece(board, move);
+
+	if (!source || !dest || !["K", "k"].includes(piece) || !is_endgame(board)) {
+		return null;
+	}
+
+	if (center_distance(dest) < center_distance(source)) {
+		return {
+			source: source.s,
+			destination: dest.s
+		};
+	}
+
+	return null;
+}
+
+function simplifies_ahead(best_value, capture) {
+	return !!capture && best_value >= 120 && piece_value(capture.piece) >= 3;
+}
+
+function is_recapture(node, capture) {
+	return !!capture && !!node && typeof node.move === "string" && capture.square === node.move.slice(2, 4);
+}
+
+function attacks_square(board, colour, square) {
+	let point = typeof square === "string" ? square_to_point(square) : square;
+	if (!point) {
+		return false;
+	}
+	return board.attacked(point, opposite_colour(colour));
+}
+
+function material_balance(board, colour) {
+	let own = 0;
+	let enemy = 0;
+
+	for (let x = 0; x < 8; x++) {
+		for (let y = 0; y < 8; y++) {
+			let piece = board.state[x][y];
+			if (!piece || ["K", "k"].includes(piece)) {
+				continue;
+			}
+
+			if (piece_colour(piece) === colour) {
+				own += piece_value(piece);
+			} else {
+				enemy += piece_value(piece);
+			}
+		}
+	}
+
+	return own - enemy;
+}
+
+function developed_minor_count(board, colour) {
+	let pieces = colour === "w" ? ["N", "B"] : ["n", "b"];
+	let home = colour === "w" ? new Set(["b1", "g1", "c1", "f1"]) : new Set(["b8", "g8", "c8", "f8"]);
+	let count = 0;
+
+	for (let x = 0; x < 8; x++) {
+		for (let y = 0; y < 8; y++) {
+			let piece = board.state[x][y];
+			let square = point_to_square(x, y);
+			if (!pieces.includes(piece)) {
+				continue;
+			}
+			if (!home.has(square)) {
+				count++;
+			}
+		}
+	}
+
+	return count;
+}
+
+function king_square(board, colour) {
+	let king_char = colour === "w" ? "K" : "k";
+	return board.find(king_char)[0] || null;
+}
+
+function is_castled(board, colour) {
+	let square = king_square(board, colour);
+	if (!square) {
+		return false;
+	}
+	if (colour === "w") {
+		return square.s === "g1" || square.s === "c1";
+	}
+	return square.s === "g8" || square.s === "c8";
+}
+
+function king_safety_score(board, colour) {
+	if (is_endgame(board)) {
+		return 0;
+	}
+
+	let square = king_square(board, colour);
+	if (!square) {
+		return 0;
+	}
+
+	let score = 0;
+
+	if (is_castled(board, colour)) {
+		score += 3;
+	}
+
+	if (has_castling_rights(board, colour)) {
+		score += 1;
+	}
+
+	if ((colour === "w" && square.y === 7) || (colour === "b" && square.y === 0)) {
+		score += 1;
+	}
+
+	let dist = center_distance(square);
+	if (dist <= 2.5) {
+		score -= 2;
+	} else if (dist <= 3.5) {
+		score -= 1;
+	}
+
+	return score;
+}
+
+function center_control_score(board, colour) {
+	let score = 0;
+
+	for (let square of central_core) {
+		let point = square_to_point(square);
+		if (board.colour(point) === colour) {
+			score += 2;
+		}
+		if (attacks_square(board, colour, point)) {
+			score += 1;
+		}
+	}
+
+	return score;
+}
+
+function space_score(board, colour) {
+	let score = 0;
+
+	for (let x = 0; x < 8; x++) {
+		for (let y = 0; y < 8; y++) {
+			let piece = board.state[x][y];
+			let square = point_to_square(x, y);
+
+			if (!piece || piece_colour(piece) !== colour) {
+				continue;
+			}
+
+			let lower = piece.toLowerCase();
+			let advanced = (colour === "w" && y <= 3) || (colour === "b" && y >= 4);
+
+			if (lower === "p") {
+				if (advanced) {
+					score += 1;
+				}
+				if (central_space.has(square)) {
+					score += 1;
+				}
+				continue;
+			}
+
+			if (central_space.has(square)) {
+				score += 1;
+			}
+		}
+	}
+
+	return score;
+}
+
+function line_snapshot(board, info, max_plies = 6) {
+	let moves = Array.isArray(info && info.pv) && info.pv.length > 0 ? info.pv : [info.move];
+	let temp = board;
+	let played = [];
+	let nice = [];
+
+	for (let move of moves) {
+		if (!move || temp.illegal(move) !== "") {
+			break;
+		}
+
+		nice.push(temp.nice_string(move));
+		played.push(move);
+		temp = temp.move(move);
+
+		if (played.length >= max_plies) {
+			break;
+		}
+	}
+
+	return {board: temp, played, nice};
+}
+
+function pv_side_sequence(board, info, start_index = 0, max_count = 2) {
+	let moves = Array.isArray(info && info.pv) && info.pv.length > 0 ? info.pv : [info && info.move].filter(Boolean);
+	let temp = board;
+	let ret = [];
+
+	for (let i = 0; i < moves.length; i++) {
+		let move = moves[i];
+
+		if (!move || temp.illegal(move) !== "") {
+			break;
+		}
+
+		let nice = temp.nice_string(move);
+
+		if (i >= start_index && ((i - start_index) % 2) === 0) {
+			ret.push(nice);
+			if (ret.length >= max_count) {
+				break;
+			}
+		}
+
+		temp = temp.move(move);
+	}
+
+	return ret.join(", ");
+}
+
+function side_follow_up(snapshot) {
+	let ret = [];
+
+	for (let i = 2; i < snapshot.nice.length && ret.length < 2; i += 2) {
+		ret.push(snapshot.nice[i]);
+	}
+
+	return ret.join(", ");
+}
+
+function line_features(board, info) {
+	let mover = board.active;
+	let snapshot = line_snapshot(board, info);
+
+	return {
+		snapshot,
+		material: material_balance(snapshot.board, mover),
+		development: developed_minor_count(snapshot.board, mover),
+		king_safety: king_safety_score(snapshot.board, mover),
+		center: center_control_score(snapshot.board, mover),
+		space: space_score(snapshot.board, mover),
+		castled: is_castled(snapshot.board, mover),
+		castling_rights: has_castling_rights(snapshot.board, mover),
+		follow_up: side_follow_up(snapshot)
+	};
+}
+
+function format_pawn_unit(delta) {
+	let abs = Math.abs(delta);
+	return abs >= 2 ? abs.toFixed(0) : abs.toFixed(1);
+}
+
+function push_coach_note(notes, seen, key, args) {
+	if (seen.has(key) || notes.length >= 3) {
+		return;
+	}
+
+	seen.add(key);
+	notes.push({key, args: args || null});
+}
+
+function push_coach_metric(metrics, label_key, text_key, args) {
+	metrics.push({
+		label_key,
+		text_key,
+		args: args || null
+	});
+}
+
+function push_why_not_reason(reasons, seen, label_key, text_key, args) {
+	let signature = label_key;
+
+	if (seen.has(signature) || reasons.length >= 3) {
+		return;
+	}
+
+	seen.add(signature);
+	reasons.push({
+		label_key,
+		text_key,
+		args: args || null
+	});
+}
+
+function coach_metrics_for({board, currentInfo, targetInfo, currentPrimary, targetPrimary, currentRank}) {
+	if (!currentInfo || !targetInfo) {
+		return [];
+	}
+
+	let current = line_features(board, currentInfo);
+	let target = line_features(board, targetInfo);
+	let other_move = board.nice_string(targetInfo.move);
+	let metrics = [];
+	let material_gap = current.material - target.material;
+	let king_gap = current.king_safety - target.king_safety;
+	let development_gap = current.development - target.development;
+	let center_space_gap = (current.center + current.space) - (target.center + target.space);
+
+	if (material_gap >= 1) {
+		push_coach_metric(metrics, "Material", "better than {other_move} by about {delta} after the next few PV moves.", {
+			other_move,
+			delta: format_pawn_unit(material_gap)
+		});
+	} else if (material_gap <= -1) {
+		push_coach_metric(metrics, "Material", "worse than {other_move} by about {delta} after the next few PV moves.", {
+			other_move,
+			delta: format_pawn_unit(material_gap)
+		});
+	} else {
+		push_coach_metric(metrics, "Material", "roughly level with {other_move} after the next few PV moves.", {other_move});
+	}
+
+	if (!is_endgame(board) && current.castling_rights && !target.castling_rights && !target.castled) {
+		push_coach_metric(metrics, "King safety", "keeps castling available while {other_move} gives that up.", {other_move});
+	} else if (!is_endgame(board) && target.castling_rights && !current.castling_rights && !current.castled) {
+		push_coach_metric(metrics, "King safety", "gives up castling while {other_move} keeps it.", {other_move});
+	} else if (king_gap >= 2) {
+		push_coach_metric(metrics, "King safety", "safer than {other_move}.", {other_move});
+	} else if (king_gap <= -2) {
+		push_coach_metric(metrics, "King safety", "riskier than {other_move}.", {other_move});
+	} else {
+		push_coach_metric(metrics, "King safety", "about as safe as {other_move}.", {other_move});
+	}
+
+	if (development_gap >= 1) {
+		push_coach_metric(metrics, "Development", "faster by {delta} minor piece(s) than {other_move}.", {
+			other_move,
+			delta: Math.abs(development_gap).toString()
+		});
+	} else if (development_gap <= -1) {
+		push_coach_metric(metrics, "Development", "slower by {delta} minor piece(s) than {other_move}.", {
+			other_move,
+			delta: Math.abs(development_gap).toString()
+		});
+	} else {
+		push_coach_metric(metrics, "Development", "about the same as {other_move}.", {other_move});
+	}
+
+	if (center_space_gap >= 2) {
+		push_coach_metric(metrics, "Center / space", "claims more of the center and more space than {other_move}.", {other_move});
+	} else if (center_space_gap <= -2) {
+		push_coach_metric(metrics, "Center / space", "concedes some center and space edge to {other_move}.", {other_move});
+	} else {
+		push_coach_metric(metrics, "Center / space", "about the same as {other_move}.", {other_move});
+	}
+
+	if (current.follow_up && target.follow_up) {
+		if (current.follow_up === target.follow_up) {
+			push_coach_metric(metrics, "Plan", "follows a similar plan to {other_move}.", {other_move});
+		} else if (currentRank === 1) {
+			push_coach_metric(metrics, "Plan", "natural follow-up is {pv}.", {pv: current.follow_up});
+		} else {
+			push_coach_metric(metrics, "Plan", "{other_move} has the cleaner follow-up with {pv}.", {
+				other_move,
+				pv: target.follow_up
+			});
+		}
+	} else if (current.follow_up) {
+		push_coach_metric(metrics, "Plan", "natural follow-up is {pv}.", {pv: current.follow_up});
+	} else if (target.follow_up) {
+		push_coach_metric(metrics, "Plan", "{other_move} has the cleaner follow-up with {pv}.", {
+			other_move,
+			pv: target.follow_up
+		});
+	} else if (currentPrimary && targetPrimary && currentPrimary === targetPrimary) {
+		push_coach_metric(metrics, "Plan", "follows a similar plan to {other_move}.", {other_move});
+	} else if (currentPrimary && targetPrimary) {
+		push_coach_metric(metrics, "Plan", "first tries to {current_idea}, while {other_move} is more coherent around {other_idea}.", {
+			current_idea: idea_phrase_key(currentPrimary),
+			other_move,
+			other_idea: idea_phrase_key(targetPrimary)
+		});
+	} else {
+		push_coach_metric(metrics, "Plan", "follows a similar plan to {other_move}.", {other_move});
+	}
+
+	return metrics;
+}
+
+function why_not_reasons_for({board, currentInfo, targetInfo, currentPrimary, targetPrimary, currentRank, replyPreview}) {
+	if (!currentInfo || !targetInfo) {
+		return [];
+	}
+
+	let current = line_features(board, currentInfo);
+	let target = line_features(board, targetInfo);
+	let reasons = [];
+	let seen = new Set();
+	let other_move = board.nice_string(targetInfo.move);
+	let current_better = currentRank === 1;
+	let material_gap = current.material - target.material;
+	let king_gap = current.king_safety - target.king_safety;
+	let development_gap = current.development - target.development;
+	let center_space_gap = (current.center + current.space) - (target.center + target.space);
+
+	if (current_better && material_gap >= 1) {
+		push_why_not_reason(reasons, seen, "Tactics", "The tactical edge is material: after the next few PV moves, this line comes out about {delta} better than {other_move}.", {
+			delta: format_pawn_unit(material_gap),
+			other_move
+		});
+	} else if (!current_better && material_gap <= -1) {
+		push_why_not_reason(reasons, seen, "Tactics", "The tactical issue is material: after the next few PV moves, {other_move} comes out about {delta} better.", {
+			delta: format_pawn_unit(material_gap),
+			other_move
+		});
+	}
+
+	if (!is_endgame(board)) {
+		if (current_better && current.castling_rights && !target.castling_rights && !target.castled) {
+			push_why_not_reason(reasons, seen, "King safety", "King safety is one reason the alternative falls short: {other_move} gives up castling while this line keeps it.", {
+				other_move
+			});
+		} else if (!current_better && target.castling_rights && !current.castling_rights && !current.castled) {
+			push_why_not_reason(reasons, seen, "King safety", "King safety is the issue: this move gives up castling while {other_move} keeps it.", {
+				other_move
+			});
+		} else if (current_better && king_gap >= 2) {
+			push_why_not_reason(reasons, seen, "King safety", "King safety is one edge here: the king stays safer than after {other_move}.", {
+				other_move
+			});
+		} else if (!current_better && king_gap <= -2) {
+			push_why_not_reason(reasons, seen, "King safety", "King safety is one issue: the king ends up less safe than after {other_move}.", {
+				other_move
+			});
+		}
+	}
+
+	if (!current_better) {
+		if (currentPrimary === "early_king") {
+			push_why_not_reason(reasons, seen, "Tempo", "The tempo problem is obvious: this spends time bringing the king out instead of developing.", null);
+		} else if (currentPrimary === "queen_early") {
+			push_why_not_reason(reasons, seen, "Tempo", "The tempo problem is obvious: this brings the queen out too soon and lets the opponent gain time.", null);
+		} else if (currentPrimary === "slow_pawn") {
+			push_why_not_reason(reasons, seen, "Tempo", "The tempo problem is obvious: this spends a move on a flank pawn instead of development.", null);
+		}
+	}
+
+	if (current_better && development_gap >= 1) {
+		push_why_not_reason(reasons, seen, "Tempo", "The alternative falls short on tempo: this line gets {delta} more minor pieces out.", {
+			delta: Math.abs(development_gap).toString()
+		});
+	} else if (!current_better && development_gap <= -1) {
+		push_why_not_reason(reasons, seen, "Tempo", "The tempo issue is development: {other_move} gets {delta} more minor pieces out.", {
+			other_move,
+			delta: Math.abs(development_gap).toString()
+		});
+	}
+
+	if (current_better && center_space_gap >= 2) {
+		push_why_not_reason(reasons, seen, "Position", "Positionally, this line gets the firmer center and more space than {other_move}.", {
+			other_move
+		});
+	} else if (!current_better && center_space_gap <= -2) {
+		push_why_not_reason(reasons, seen, "Position", "Positionally, {other_move} gets the firmer center and more space.", {
+			other_move
+		});
+	}
+
+	if (replyPreview) {
+		if (!current_better && replyPreview.note_args && replyPreview.note_args.reply_move && replyPreview.note_args.pv) {
+			push_why_not_reason(reasons, seen, "Plan", "The plan problem is that after {reply_move}, the opponent can often continue with {pv}.", {
+				reply_move: replyPreview.note_args.reply_move,
+				pv: replyPreview.note_args.pv
+			});
+		} else if (!current_better && replyPreview.summary_args && replyPreview.summary_args.reply_move) {
+			push_why_not_reason(reasons, seen, "Plan", "The plan problem is that after {reply_move}, the opponent gets a comfortable version of {reply_idea}.", {
+				reply_move: replyPreview.summary_args.reply_move,
+				reply_idea: replyPreview.summary_args.reply_idea
+			});
+		} else if (current_better && currentPrimary && targetPrimary && currentPrimary !== targetPrimary) {
+			push_why_not_reason(reasons, seen, "Plan", "The alternative falls short because it is less coherent: it is more about {other_idea} than {current_idea}.", {
+				other_idea: idea_phrase_key(targetPrimary),
+				current_idea: idea_phrase_key(currentPrimary)
+			});
+		} else if (current_better && target.follow_up) {
+			push_why_not_reason(reasons, seen, "Plan", "The alternative falls short because the plan is less coherent after {other_move}.", {
+				other_move
+			});
+		}
+	}
+
+	if (reasons.length === 0) {
+		if (current_better) {
+			push_why_not_reason(reasons, seen, "Plan", "The alternative falls short because the plan is less coherent after {other_move}.", {
+				other_move
+			});
+		} else {
+			push_why_not_reason(reasons, seen, "Plan", "The move is not refuted, but it lets the opponent solve the position a little too comfortably.", null);
+		}
+	}
+
+	return reasons;
+}
+
+function coach_notes_for({board, currentInfo, targetInfo, currentPrimary, targetPrimary, currentRank}) {
+	if (!currentInfo || !targetInfo) {
+		return [];
+	}
+
+	let current = line_features(board, currentInfo);
+	let target = line_features(board, targetInfo);
+	let notes = [];
+	let seen = new Set();
+	let other_move = board.nice_string(targetInfo.move);
+	let current_better = currentRank === 1;
+	let material_gap = current.material - target.material;
+	let king_gap = current.king_safety - target.king_safety;
+	let development_gap = current.development - target.development;
+	let center_space_gap = (current.center + current.space) - (target.center + target.space);
+
+	if (current_better && material_gap >= 1) {
+		push_coach_note(notes, seen, "Material is one of the differences: this line comes out about {delta} better than {other_move} after the first few PV moves.", {
+			delta: format_pawn_unit(material_gap),
+			other_move
+		});
+	} else if (!current_better && material_gap <= -1) {
+		push_coach_note(notes, seen, "Material is one of the differences: {other_move} comes out about {delta} better after the first few PV moves.", {
+			delta: format_pawn_unit(material_gap),
+			other_move
+		});
+	}
+
+	if (!is_endgame(board)) {
+		if (current_better && current.castling_rights && !target.castling_rights && !target.castled) {
+			push_coach_note(notes, seen, "This line keeps castling available, while {other_move} gives that up.", {other_move});
+		} else if (!current_better && target.castling_rights && !current.castling_rights && !current.castled) {
+			push_coach_note(notes, seen, "{other_move} keeps castling available, while this line gives that up.", {other_move});
+		} else if (current_better && king_gap >= 2) {
+			push_coach_note(notes, seen, "King safety is a plus for this move: it keeps the king safer than {other_move}.", {other_move});
+		} else if (!current_better && king_gap <= -2) {
+			push_coach_note(notes, seen, "King safety is one of the problems: {other_move} keeps the king safer than this line.", {other_move});
+		}
+	}
+
+	if (current_better && development_gap >= 1) {
+		push_coach_note(notes, seen, "Development is a plus for this move: it gets {delta} more minor pieces out than {other_move}.", {
+			delta: Math.abs(development_gap).toString(),
+			other_move
+		});
+	} else if (!current_better && development_gap <= -1) {
+		push_coach_note(notes, seen, "Development is slower here: {other_move} gets {delta} more minor pieces out.", {
+			delta: Math.abs(development_gap).toString(),
+			other_move
+		});
+	}
+
+	if (current_better && center_space_gap >= 2) {
+		push_coach_note(notes, seen, "This line fights harder for the center and claims more space than {other_move}.", {other_move});
+	} else if (!current_better && center_space_gap <= -2) {
+		push_coach_note(notes, seen, "{other_move} fights harder for the center and claims more space.", {other_move});
+	}
+
+	if (notes.length < 3) {
+		if (current_better && current.follow_up) {
+			push_coach_note(notes, seen, "Plan-wise, the follow-up with {pv} keeps the pieces working together naturally.", {
+				pv: current.follow_up
+			});
+		} else if (!current_better && target.follow_up) {
+			push_coach_note(notes, seen, "Plan-wise, {other_move} can continue with {pv}, so the pieces work together more naturally.", {
+				other_move,
+				pv: target.follow_up
+			});
+		} else if (currentPrimary && targetPrimary && currentPrimary !== targetPrimary) {
+			push_coach_note(notes, seen, "Plan-wise, {other_move} is more coherent because it first tries to {other_idea}.", {
+				other_move,
+				other_idea: idea_phrase_key(targetPrimary)
+			});
+		}
+	}
+
+	return notes;
+}
+
+function reply_preview_for({board, info, currentPrimary, currentRank, touched}) {
+	if (!info || !Array.isArray(info.pv) || info.pv.length < 2) {
+		return null;
+	}
+
+	let board_after = board.move(info.move);
+	let reply_move = info.pv[1];
+
+	if (!reply_move || board_after.illegal(reply_move) !== "") {
+		return null;
+	}
+
+	let reply_info = {
+		move: reply_move,
+		pv: info.pv.slice(1),
+		cp: typeof info.cp === "number" ? -info.cp : info.cp,
+		q: typeof info.q === "number" ? -info.q : info.q,
+		mate: typeof info.mate === "number" ? -info.mate : info.mate,
+		__touched: !!info.__touched
+	};
+
+	let reply_explanation = explainMove({
+		node: {
+			board: board_after,
+			move: info.move
+		},
+		info: reply_info,
+		bestInfo: reply_info,
+		secondInfo: null,
+		infoList: [reply_info]
+	}, true);
+
+	let reply_nice_move = board_after.nice_string(reply_move);
+	let reply_idea = idea_phrase_key(reply_explanation.primary);
+	let later_plan = pv_side_sequence(board, info, 3);
+	let summary_key = "The engine expects {reply_move} in reply, first trying to {reply_idea}.";
+	let summary_args = {
+		reply_move: reply_nice_move,
+		reply_idea
+	};
+	let note_key = "That is the practical drawback: the opponent gets a comfortable answer immediately.";
+	let note_args = null;
+
+	if (!touched) {
+		summary_key = "If the opponent gets time, a natural reply is {reply_move}, aiming to {reply_idea}.";
+	} else if (currentRank === 1) {
+		summary_key = "The best resistance is {reply_move}: it first tries to {reply_idea}.";
+	}
+
+	if (currentRank === 1) {
+		if (later_plan) {
+			note_key = "If the line continues, the opponent often follows with {pv}, but the engine still prefers your move.";
+			note_args = {pv: later_plan};
+		} else {
+			note_key = "That is the best resistance the engine has found after your move.";
+		}
+	} else if (["early_king", "queen_early", "slow_pawn"].includes(currentPrimary)) {
+		if (later_plan) {
+			note_key = "That is why the move is hard to justify: after {reply_move}, the opponent gets this idea for free and can often follow with {pv}.";
+			note_args = {
+				reply_move: reply_nice_move,
+				pv: later_plan
+			};
+		} else {
+			note_key = "That is why the move is hard to justify: after {reply_move}, the opponent gets this idea for free.";
+			note_args = {reply_move: reply_nice_move};
+		}
+	} else if (later_plan) {
+		note_key = "From there the opponent often follows with {pv}, so the plan is easy for them to play.";
+		note_args = {pv: later_plan};
+	}
+
+	return {
+		summary_key,
+		summary_args,
+		theme_key: reply_explanation.theme_keys[0] || null,
+		theme_args: reply_explanation.theme_args[0] || null,
+		note_key,
+		note_args
+	};
+}
+
+function push_theme(themes, raw_tags, seen, key, args, raw_tag) {
+	if (seen.has(key) || themes.length >= 4) {
+		return;
+	}
+
+	seen.add(key);
+	themes.push({key, args: args || null});
+
+	if (raw_tag) {
+		raw_tags.push(raw_tag);
+	}
+}
+
+function primary_tag(raw_tags) {
+	return raw_tags.length > 0 ? raw_tags[0] : "quiet";
+}
+
+function summary_key_for(primary, rank, best_value, delta_cp, top_gap, mate, touched) {
+	if (!touched) {
+		if (primary === "early_king") {
+			return "Even before a deep search, this king move looks suspicious: it brings the king out early and usually gives up castling.";
+		}
+		if (primary === "queen_early") {
+			return "Even before a deep search, this develops the queen very early and may let the opponent gain time by attacking it.";
+		}
+		if (primary === "slow_pawn") {
+			return "Even before a deep search, this is a slow flank-pawn move that neglects development and the center.";
+		}
+		return "This move is legal and follows a clear idea, but the engine has not searched it deeply yet.";
+	}
+
+	if (rank === 1) {
+		if (mate) {
+			return "This move converts the position immediately with a forcing mating attack.";
+		}
+		if (primary === "castle") {
+			return "The first priority is king safety, so castling now makes the most sense.";
+		}
+		if (primary === "development") {
+			return "The engine wants to finish development before starting concrete operations.";
+		}
+		if (primary === "center_pawn") {
+			return "The point is to claim central space while keeping the position easy to handle.";
+		}
+		if (primary === "save_piece") {
+			return "This tidies up a loose piece and removes a tactical problem.";
+		}
+		if (primary === "king_activity") {
+			return "In the endgame, the king is strong enough to step forward.";
+		}
+		if (primary === "threat") {
+			return "The move creates an immediate threat and asks the opponent a concrete question.";
+		}
+		if (primary === "simplify") {
+			return "The cleanest plan is to simplify while the evaluation is favorable.";
+		}
+		if (primary === "capture" && best_value >= 80) {
+			return "The engine prefers to cash in immediately instead of keeping the tension.";
+		}
+		if (top_gap !== null && top_gap >= 80) {
+			return "This looks like the only move that clearly keeps the position under control.";
+		}
+		if (best_value >= 120) {
+			return "This is the clearest way to press the advantage.";
+		}
+		if (best_value <= -120) {
+			return "This is the main defensive resource in a difficult position.";
+		}
+		return "This is the engine's top choice and a natural way to keep the balance.";
+	}
+
+	if (delta_cp !== null && delta_cp <= 25) {
+		if (["development", "center_pawn", "castle", "king_activity"].includes(primary)) {
+			return "This follows the same strategic idea as the best line and stays very close.";
+		}
+		return "This is a practical alternative that stays very close to the best line.";
+	}
+
+	if (rank !== 1 && primary === "early_king") {
+		if (delta_cp !== null && delta_cp >= 120) {
+			return "This brings the king out far too early, weakens king safety, and the engine dislikes it immediately.";
+		}
+		return "This brings the king out early and usually gives up castling for too little in return.";
+	}
+
+	if (rank !== 1 && primary === "queen_early") {
+		if (delta_cp !== null && delta_cp >= 100) {
+			return "This queen move is too early for the opening, and the engine expects the opponent to gain time against it.";
+		}
+		return "This develops the queen before the pieces are ready, so it risks losing time to natural attacks.";
+	}
+
+	if (rank !== 1 && primary === "slow_pawn") {
+		if (delta_cp !== null && delta_cp >= 80) {
+			return "This spends a full tempo on a slow flank-pawn move and falls behind in the opening race.";
+		}
+		return "This is a slow flank-pawn move that does little for development or central control.";
+	}
+
+	if (primary === "save_piece" && delta_cp !== null && delta_cp <= 80) {
+		return "It solves the immediate problem, but not in the most precise way.";
+	}
+
+	if (best_value >= 120) {
+		return "It keeps the right idea, but misses a cleaner continuation.";
+	}
+
+	if (best_value <= -120) {
+		return "This still fights, but it makes the defensive task harder than the best line.";
+	}
+
+	if (delta_cp !== null && delta_cp <= 80) {
+		return "This is playable, but it gives the opponent a little more freedom.";
+	}
+
+	return "This is understandable, but it concedes a noticeable amount compared with the best move.";
+}
+
+function pv_hint_key_for(primary, has_pv) {
+	if (!has_pv) {
+		return "The idea is mainly positional: improve the pieces and keep the same plan.";
+	}
+
+	switch (primary) {
+	case "castle":
+		return "After castling, the PV continues with {pv}.";
+	case "development":
+		return "The follow-up is to finish development with {pv}.";
+	case "center_pawn":
+		return "The continuation supports the center with {pv}.";
+	case "passed_pawn":
+		return "The PV keeps the pawn rolling with {pv}.";
+	case "open_file":
+	case "half_open_file":
+		return "The engine keeps pressing on the file with {pv}.";
+	case "check":
+	case "mate":
+	case "capture":
+	case "threat":
+	case "promotion":
+		return "The engine keeps asking tactical questions with {pv}.";
+	case "save_piece":
+	case "defense":
+		return "The PV shows the position settling down after {pv}.";
+	case "king_activity":
+		return "Then the king keeps improving with {pv}.";
+	case "simplify":
+		return "The continuation keeps the conversion simple with {pv}.";
+	case "early_king":
+	case "queen_early":
+	case "slow_pawn":
+		return "The engine's preferred setup after this is {pv}.";
+	default:
+		return "The engine's main continuation is {pv}.";
+	}
+}
+
+function idea_phrase_key(primary) {
+	switch (primary) {
+	case "development": return "finish development";
+	case "center_pawn": return "claim central space";
+	case "castle": return "secure the king";
+	case "save_piece": return "save a loose piece";
+	case "threat": return "create an immediate threat";
+	case "capture":
+	case "recapture":
+	case "promotion": return "win material immediately";
+	case "passed_pawn": return "push the passed pawn";
+	case "king_activity": return "activate the king";
+	case "open_file":
+	case "half_open_file": return "put the rook on an active file";
+	case "defense":
+	case "escape_check": return "stabilize the position";
+	case "simplify": return "simplify into a cleaner position";
+	case "check":
+	case "mate": return "keep the initiative";
+	case "early_king": return "bring the king out early";
+	case "queen_early": return "bring the queen out too soon";
+	case "slow_pawn": return "spend a tempo on a flank pawn";
+	default: return "improve piece placement";
+	}
+}
+
+function delta_args_for(bestInfo, info) {
+	let args = format_delta_args(bestInfo, info);
+	if (!args) {
+		return null;
+	}
+	return args;
+}
+
+function comparison_for({current, best, rival, bestInfo, info, best_value, delta_cp, top_gap}) {
+	if (!current.touched) {
+		if (!best || best.move === current.move) {
+			return {
+				key: "The engine has not searched this move deeply enough to compare it confidently.",
+				args: null
+			};
+		}
+
+		if (current.primary === "early_king") {
+			return {
+				key: "This brings the king out very early, while the engine would rather {best_idea} with {best_move}.",
+				args: {
+					best_idea: idea_phrase_key(best.primary),
+					best_move: best.nice_move
+				}
+			};
+		}
+
+		if (current.primary === "queen_early") {
+			return {
+				key: "This brings the queen out too soon, while the engine would rather {best_idea} with {best_move}.",
+				args: {
+					best_idea: idea_phrase_key(best.primary),
+					best_move: best.nice_move
+				}
+			};
+		}
+
+		if (current.primary === "slow_pawn") {
+			return {
+				key: "This spends a tempo on a flank pawn, while the engine would rather {best_idea} with {best_move}.",
+				args: {
+					best_idea: idea_phrase_key(best.primary),
+					best_move: best.nice_move
+				}
+			};
+		}
+
+		if (current.primary === best.primary) {
+			return {
+				key: "This follows a similar plan to {best_move}, but the engine is not prioritizing it yet.",
+				args: {best_move: best.nice_move}
+			};
+		}
+
+		return {
+			key: "This move aims to {current_idea}, but the engine would rather {best_idea} with {best_move}.",
+			args: {
+				current_idea: idea_phrase_key(current.primary),
+				best_idea: idea_phrase_key(best.primary),
+				best_move: best.nice_move
+			}
+		};
+	}
+
+	if (current.rank === 1) {
+		if (!rival || rival.move === current.move) {
+			return {
+				key: "The engine has not produced a meaningful alternative yet.",
+				args: null
+			};
+		}
+
+		if (current.primary === rival.primary) {
+			if (top_gap !== null && top_gap <= 15) {
+				return {
+					key: "Compared with {other_move}, this move carries out the same idea just a touch more accurately.",
+					args: {other_move: rival.nice_move}
+				};
+			}
+
+			if (top_gap !== null && top_gap <= 40) {
+				return {
+					key: "Compared with {other_move}, this move carries out the same idea more cleanly.",
+					args: {other_move: rival.nice_move}
+				};
+			}
+		}
+
+		let base_args = {
+			other_move: rival.nice_move,
+			current_idea: idea_phrase_key(current.primary),
+			other_idea: idea_phrase_key(rival.primary)
+		};
+		let delta_args = delta_args_for(bestInfo, rival.source_info);
+
+		if (delta_args && top_gap !== null && top_gap > 40) {
+			return {
+				key: "Compared with {other_move}, this move first tries to {current_idea}, while the alternative is more about trying to {other_idea}; that difference is worth about {delta}.",
+				args: Object.assign(base_args, delta_args)
+			};
+		}
+
+		if (top_gap !== null && top_gap >= 80 && delta_args) {
+			return {
+				key: "The gap to {other_move} is about {delta}, and the best line gets to {current_idea} more directly.",
+				args: Object.assign(base_args, delta_args)
+			};
+		}
+
+		return {
+			key: "Compared with {other_move}, this move first tries to {current_idea}, while the alternative is more about trying to {other_idea}.",
+			args: base_args
+		};
+	}
+
+	if (!best || best.move === current.move) {
+		return {
+			key: "The engine has not searched this move deeply enough to compare it confidently.",
+			args: null
+		};
+	}
+
+	if (current.primary === "early_king") {
+		let args = {
+			best_move: best.nice_move,
+			best_idea: idea_phrase_key(best.primary)
+		};
+		let delta_args = delta_args_for(bestInfo, info);
+
+		if (delta_args) {
+			return {
+				key: "This walks the king out early, while {best_move} first tries to {best_idea}; that costs about {delta}.",
+				args: Object.assign(args, delta_args)
+			};
+		}
+
+		return {
+			key: "This walks the king out early, while {best_move} first tries to {best_idea}.",
+			args
+		};
+	}
+
+	if (current.primary === "queen_early") {
+		let args = {
+			best_move: best.nice_move,
+			best_idea: idea_phrase_key(best.primary)
+		};
+		let delta_args = delta_args_for(bestInfo, info);
+
+		if (delta_args) {
+			return {
+				key: "This brings the queen out too soon, while {best_move} first tries to {best_idea}; that costs about {delta}.",
+				args: Object.assign(args, delta_args)
+			};
+		}
+
+		return {
+			key: "This brings the queen out too soon, while {best_move} first tries to {best_idea}.",
+			args
+		};
+	}
+
+	if (current.primary === "slow_pawn") {
+		let args = {
+			best_move: best.nice_move,
+			best_idea: idea_phrase_key(best.primary)
+		};
+		let delta_args = delta_args_for(bestInfo, info);
+
+		if (delta_args) {
+			return {
+				key: "This spends a tempo on a flank pawn, while {best_move} first tries to {best_idea}; that costs about {delta}.",
+				args: Object.assign(args, delta_args)
+			};
+		}
+
+		return {
+			key: "This spends a tempo on a flank pawn, while {best_move} first tries to {best_idea}.",
+			args
+		};
+	}
+
+	if (current.primary === best.primary) {
+		if (delta_cp !== null && delta_cp <= 15) {
+			return {
+				key: "This is almost as good as the engine's first choice.",
+				args: null
+			};
+		}
+
+		if (delta_cp !== null && delta_cp <= 40) {
+			let args = delta_args_for(bestInfo, info);
+			if (args) {
+				return {
+					key: "Compared with {best_move}, this move follows the same plan but gives away about {delta}.",
+					args: Object.assign({best_move: best.nice_move}, args)
+				};
+			}
+			return {
+				key: "Compared with {best_move}, this move follows the same plan but is a little less precise.",
+				args: {best_move: best.nice_move}
+			};
+		}
+	}
+
+	let comparison_args = {
+		current_idea: idea_phrase_key(current.primary),
+		best_idea: idea_phrase_key(best.primary),
+		best_move: best.nice_move
+	};
+	let delta_args = delta_args_for(bestInfo, info);
+
+	if (delta_args) {
+		if (delta_cp <= 40) {
+			return {
+				key: "This move is more about {current_idea}, while the engine would rather {best_idea} with {best_move}.",
+				args: comparison_args
+			};
+		}
+
+		if (best_value >= 120) {
+			return {
+				key: "This move is more about trying to {current_idea}, while {best_move} first tries to {best_idea}; that costs about {delta}.",
+				args: Object.assign(comparison_args, delta_args)
+			};
+		}
+
+		if (best_value <= -120) {
+			return {
+				key: "This move is more about trying to {current_idea}, but under pressure the engine prefers {best_move} to {best_idea}; that saves about {delta}.",
+				args: Object.assign(comparison_args, delta_args)
+			};
+		}
+
+		return {
+			key: "This move is more about trying to {current_idea}, while the engine would rather {best_idea} with {best_move}; that costs about {delta}.",
+			args: Object.assign(comparison_args, delta_args)
+		};
+	}
+
+	return {
+		key: "This move is more about trying to {current_idea}, while the engine would rather {best_idea} with {best_move}.",
+		args: comparison_args
+	};
+}
+
+function explain_unsearched_move(node, info, total_candidates) {
+	let eval_object = format_eval_text(info);
+	let move = info && typeof info.move === "string" ? info.move : "";
+	let nice_move = move ? node.board.nice_string(move) : "?";
+
+	return {
+		move,
+		nice_move,
+		rank: 1,
+		total_candidates,
+		eval_text: eval_object.key,
+		eval_args: eval_object.args,
+		delta_from_best: null,
+		summary_key: "This move is legal, but the engine has not searched it deeply yet.",
+		summary_args: null,
+		theme_keys: [],
+		theme_args: [],
+		pv_hint_key: "The idea is mainly positional: improve the pieces and keep the same plan.",
+		pv_hint_args: null,
+		comparison_key: "The engine has not searched this move deeply enough to compare it confidently.",
+		comparison_args: null,
+		reply_summary_key: null,
+		reply_summary_args: null,
+		reply_theme_key: null,
+		reply_theme_args: null,
+		reply_note_key: null,
+		reply_note_args: null,
+		why_not_label_key: "Why this falls short",
+		why_not_reason_label_keys: [],
+		why_not_reason_text_keys: [],
+		why_not_reason_args: [],
+		coach_metric_label_keys: [],
+		coach_metric_text_keys: [],
+		coach_metric_args: [],
+		coach_keys: [],
+		coach_args: [],
+		raw_tags: ["unsearched"]
+	};
+}
+
+function explainMove({node, info, bestInfo, secondInfo, infoList}, internal = false) {
+	let info_list = Array.isArray(infoList) ? infoList : [info].filter(Boolean);
+	let total_candidates = info_list.length || 1;
+
+	if (!info) {
+		return explain_unsearched_move(node, info, total_candidates);
+	}
+
+	let board = node.board;
+	let board_after = board.move(info.move);
+	let eval_object = format_eval_text(info);
+	let rank = Math.max(1, info_list.findIndex(o => o.move === info.move) + 1);
+	let touched = !!info.__touched;
+	let best_reference = (bestInfo && bestInfo.__touched) ? bestInfo : (touched ? info : null);
+	let best_value = best_reference ? score_value(best_reference) : 0;
+	let delta_cp = (touched && best_reference) ? Math.abs(best_value - score_value(info)) : null;
+	let top_gap = (best_reference && secondInfo && secondInfo.__touched) ? Math.abs(best_value - score_value(secondInfo)) : null;
+	let capture = capture_info(board, info.move);
+	let check = king_checked_after(board_after, board.active);
+	let mate = check && board_after.no_moves();
+	let central_pawn = central_pawn_info(board, info.move);
+	let threat = fresh_attack_target(board, board_after);
+	let save_piece = save_piece_info(board, board_after, info.move);
+	let king_activity = king_activity_info(board, info.move);
+	let early_king = early_king_move_info(board, board_after, info.move);
+	let queen_early = early_queen_move_info(board, info.move);
+	let slow_opening = slow_opening_move_info(board, info.move, capture, threat, central_pawn);
+	let rook_file = rook_file_state(board_after, info.move);
+	let themes = [];
+	let raw_tags = [];
+	let seen = new Set();
+
+	if (mate) {
+		push_theme(themes, raw_tags, seen, "It starts a forcing mating sequence.", null, "mate");
+	}
+	if (board.king_in_check()) {
+		push_theme(themes, raw_tags, seen, "It gets the king out of check and stabilizes the position.", null, "escape_check");
+	}
+	if (check) {
+		push_theme(themes, raw_tags, seen, "It gives check and forces an immediate reply.", null, "check");
+	}
+	if (info.move.length === 5) {
+		push_theme(themes, raw_tags, seen, "It promotes the pawn and transforms the position immediately.", null, "promotion");
+	}
+	if (capture) {
+		if (is_recapture(node, capture)) {
+			push_theme(themes, raw_tags, seen, "It recaptures on {square} and restores material balance.", {square: capture.square}, "recapture");
+		} else {
+			push_theme(themes, raw_tags, seen, "It wins material by capturing a {piece}.", {piece: piece_name(capture.piece)}, "capture");
+		}
+	}
+	if (save_piece) {
+		push_theme(themes, raw_tags, seen, "It moves a loose piece away from danger and reduces tactical risk.", null, "save_piece");
+	}
+	if (threat) {
+		if (threat.undefended) {
+			push_theme(themes, raw_tags, seen, "It hits an undefended {piece}, so tactics may follow.", {piece: piece_name(threat.piece)}, "threat");
+		} else {
+			push_theme(themes, raw_tags, seen, "It hits the enemy {piece} and creates a concrete threat.", {piece: piece_name(threat.piece)}, "threat");
+		}
+	}
+	if (is_castling_move(board, info.move)) {
+		push_theme(themes, raw_tags, seen, "It castles to improve king safety and connect the rooks.", null, "castle");
+	}
+	if (early_king) {
+		if (early_king.loses_castling) {
+			push_theme(themes, raw_tags, seen, "It brings the king out early and gives up castling rights, which is usually a serious opening concession.", null, "early_king");
+		} else {
+			push_theme(themes, raw_tags, seen, "It brings the king out early, which is usually risky before development is complete.", null, "early_king");
+		}
+	}
+	if (queen_early) {
+		push_theme(themes, raw_tags, seen, "It develops the queen very early, so the opponent may gain time by attacking it.", null, "queen_early");
+	}
+	if (is_development_move(board, info.move)) {
+		if (development_supports_castling(board, info.move)) {
+			push_theme(themes, raw_tags, seen, "It improves castling chances by finishing a useful developing move.", null, "development");
+		} else {
+			push_theme(themes, raw_tags, seen, "It develops a minor piece to a more active square.", null, "development");
+		}
+	}
+	if (central_pawn) {
+		push_theme(themes, raw_tags, seen, "It claims central space with a pawn and asks the opponent how they want to react.", null, "center_pawn");
+	}
+	if (slow_opening) {
+		push_theme(themes, raw_tags, seen, "It spends a tempo on a flank pawn and does little for development or central control.", null, "slow_pawn");
+	}
+	if (king_activity) {
+		push_theme(themes, raw_tags, seen, "It activates the king toward the center, which is often important in the endgame.", null, "king_activity");
+	}
+	if (rook_file === "open") {
+		push_theme(themes, raw_tags, seen, "It places a rook on an open file to increase pressure.", null, "open_file");
+	} else if (rook_file === "half-open") {
+		push_theme(themes, raw_tags, seen, "It puts a rook on a half-open file where it can lean on the enemy camp.", null, "half_open_file");
+	}
+	if (is_passed_pawn(board_after, info.move)) {
+		push_theme(themes, raw_tags, seen, "It advances a passed pawn and asks endgame questions.", null, "passed_pawn");
+	}
+	if (simplifies_ahead(best_value, capture)) {
+		push_theme(themes, raw_tags, seen, "With the better position, it simplifies into a cleaner game.", null, "simplify");
+	}
+	if (best_value <= -120 && (rank === 1 || (delta_cp !== null && delta_cp <= 40) || board.king_in_check())) {
+		push_theme(themes, raw_tags, seen, "It is a stubborn defensive resource that keeps the game going.", null, "defense");
+	}
+	if (themes.length === 0) {
+		push_theme(themes, raw_tags, seen, "It mainly improves piece placement without changing the structure.", null, "quiet");
+	}
+
+	let primary = primary_tag(raw_tags);
+	let summary_key = summary_key_for(primary, rank, best_value, delta_cp, top_gap, mate, touched);
+	let nice_line = nice_pv(board, info).slice(1, 4).join(" ");
+	let pv_hint_key = pv_hint_key_for(primary, !!nice_line);
+	let comparison = {
+		key: "The engine has not produced a meaningful alternative yet.",
+		args: null
+	};
+	let reply_preview = null;
+	let why_not_reasons = [];
+	let coach_metrics = [];
+	let coach_notes = [];
+
+	if (!internal) {
+		let best_explanation = null;
+		let rival_explanation = null;
+
+		if (bestInfo && bestInfo.move !== info.move) {
+			best_explanation = explainMove({
+				node,
+				info: bestInfo,
+				bestInfo,
+				secondInfo: null,
+				infoList: info_list
+			}, true);
+		}
+
+		if (rank === 1 && secondInfo && secondInfo.move !== info.move) {
+			rival_explanation = explainMove({
+				node,
+				info: secondInfo,
+				bestInfo,
+				secondInfo: null,
+				infoList: info_list
+			}, true);
+		}
+
+		comparison = comparison_for({
+			current: {
+				move: info.move,
+				nice_move: board.nice_string(info.move),
+				primary,
+				touched,
+				rank
+			},
+			best: best_explanation,
+			rival: rival_explanation,
+			bestInfo,
+			info,
+			best_value,
+			delta_cp,
+			top_gap
+		});
+
+		let coach_target_info = rank === 1 ? secondInfo : (bestInfo && bestInfo.move !== info.move ? bestInfo : null);
+		let coach_target_primary = null;
+
+		if (rank === 1 && rival_explanation) {
+			coach_target_primary = rival_explanation.primary;
+		} else if (rank !== 1 && best_explanation) {
+			coach_target_primary = best_explanation.primary;
+		}
+
+		coach_notes = coach_notes_for({
+			board,
+			currentInfo: info,
+			targetInfo: coach_target_info,
+			currentPrimary: primary,
+			targetPrimary: coach_target_primary,
+			currentRank: rank
+		});
+
+		coach_metrics = coach_metrics_for({
+			board,
+			currentInfo: info,
+			targetInfo: coach_target_info,
+			currentPrimary: primary,
+			targetPrimary: coach_target_primary,
+			currentRank: rank
+		});
+
+		reply_preview = reply_preview_for({
+			board,
+			info,
+			currentPrimary: primary,
+			currentRank: rank,
+			touched
+		});
+
+		why_not_reasons = why_not_reasons_for({
+			board,
+			currentInfo: info,
+			targetInfo: coach_target_info,
+			currentPrimary: primary,
+			targetPrimary: coach_target_primary,
+			currentRank: rank,
+			replyPreview: reply_preview
+		});
+	}
+
+	return {
+		move: info.move,
+		nice_move: board.nice_string(info.move),
+		rank,
+		total_candidates,
+		eval_text: eval_object.key,
+		eval_args: eval_object.args,
+		delta_from_best: rank === 1 ? 0 : delta_cp,
+		summary_key,
+		summary_args: null,
+		theme_keys: themes.map(theme => theme.key),
+		theme_args: themes.map(theme => theme.args),
+		pv_hint_key,
+		pv_hint_args: nice_line ? {pv: nice_line} : null,
+		comparison_key: comparison.key,
+		comparison_args: comparison.args,
+		reply_summary_key: reply_preview ? reply_preview.summary_key : null,
+		reply_summary_args: reply_preview ? reply_preview.summary_args : null,
+		reply_theme_key: reply_preview ? reply_preview.theme_key : null,
+		reply_theme_args: reply_preview ? reply_preview.theme_args : null,
+		reply_note_key: reply_preview ? reply_preview.note_key : null,
+		reply_note_args: reply_preview ? reply_preview.note_args : null,
+		why_not_label_key: rank === 1 ? "Why the alternatives fall short" : "Why this falls short",
+		why_not_reason_label_keys: why_not_reasons.map(reason => reason.label_key),
+		why_not_reason_text_keys: why_not_reasons.map(reason => reason.text_key),
+		why_not_reason_args: why_not_reasons.map(reason => reason.args),
+		coach_metric_label_keys: coach_metrics.map(metric => metric.label_key),
+		coach_metric_text_keys: coach_metrics.map(metric => metric.text_key),
+		coach_metric_args: coach_metrics.map(metric => metric.args),
+		coach_keys: coach_notes.map(note => note.key),
+		coach_args: coach_notes.map(note => note.args),
+		raw_tags,
+		primary,
+		touched,
+		source_info: info
+	};
+}
+
+function interpolate(template, args) {
+	if (typeof template !== "string" || !args) {
+		return template;
+	}
+
+	let rendered = template;
+
+	for (let [key, value] of Object.entries(args)) {
+		rendered = rendered.split(`{${key}}`).join(value);
+	}
+
+	return rendered;
+}
+
+function renderExplanation(explanation, translate_fn) {
+	let translate = (key, args) => {
+		let translated_key = translate_fn(key) || key;
+		let translated_args = null;
+		let should_translate_args = translated_key !== key;
+
+		if (args) {
+			translated_args = Object.create(null);
+			for (let [name, value] of Object.entries(args)) {
+				if (typeof value === "string") {
+					if (should_translate_args) {
+						let translated_value = translate_fn(value);
+						translated_args[name] = translated_value || value;
+					} else {
+						translated_args[name] = value;
+					}
+				} else {
+					translated_args[name] = value;
+				}
+			}
+		}
+
+		return interpolate(translated_key, translated_args);
+	};
+
+	return {
+		title: translate("Move explanation"),
+		rank_line: translate("Candidate {rank} of {total}", {
+			rank: explanation.rank.toString(),
+			total: explanation.total_candidates.toString()
+		}),
+		eval_line: translate("Eval {eval}", {
+			eval: translate(explanation.eval_text, explanation.eval_args)
+		}),
+		key_ideas_label: translate("Key ideas"),
+		main_idea_label: translate("Main idea"),
+		reply_label: translate("Likely reply"),
+		why_not_label: translate(explanation.why_not_label_key),
+		coach_label: translate("Coach view"),
+		comparison_label: translate("Comparison"),
+		summary: translate(explanation.summary_key, explanation.summary_args),
+		themes: explanation.theme_keys.map((key, index) => translate(key, explanation.theme_args[index])),
+		pv_hint: translate(explanation.pv_hint_key, explanation.pv_hint_args),
+		reply_summary: explanation.reply_summary_key ? translate(explanation.reply_summary_key, explanation.reply_summary_args) : "",
+		reply_theme: explanation.reply_theme_key ? translate(explanation.reply_theme_key, explanation.reply_theme_args) : "",
+		reply_note: explanation.reply_note_key ? translate(explanation.reply_note_key, explanation.reply_note_args) : "",
+		why_not_reasons: (explanation.why_not_reason_label_keys || []).map((label_key, index) => ({
+			label: translate(label_key),
+			text: translate((explanation.why_not_reason_text_keys || [])[index], (explanation.why_not_reason_args || [])[index])
+		})),
+		coach_metrics: (explanation.coach_metric_label_keys || []).map((label_key, index) => ({
+			label: translate(label_key),
+			text: translate((explanation.coach_metric_text_keys || [])[index], (explanation.coach_metric_args || [])[index])
+		})),
+		coach_notes: (explanation.coach_keys || []).map((key, index) => translate(key, explanation.coach_args[index])),
+		comparison: translate(explanation.comparison_key, explanation.comparison_args),
+	};
+}
+
+module.exports = {
+	explainMove,
+	renderExplanation,
+};

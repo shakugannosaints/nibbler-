@@ -5,6 +5,7 @@ function NewHub() {
 	let hub = Object.create(null);
 
 	hub.engine = NewEngine(hub);						// Just a dummy object with no exe. Fixed by start.js later.
+	hub.hover_analysis = NewHoverAnalysis(hub);
 	hub.tree = NewTreeHandler();
 	hub.grapher = NewGrapher();
 	hub.looker = NewLooker();
@@ -30,6 +31,13 @@ function NewHub() {
 	hub.position_change_time = performance.now();		// Time of the last position change. Used for cooldown on hoverdraw.
 	hub.node_to_clean = hub.tree.node;					// The next node to be cleaned up (done when exiting it).
 	hub.leela_lock_node = null;							// Non-null only when in "analysis_locked" mode.
+	hub.explanation_selected_move = null;
+	hub.explanation_preview_move = null;
+	hub.explanation_preview_hold_until = 0;
+	hub.explanation_panel_expanded = false;
+	hub.explanation_panel_hovered = false;
+	hub.explanation_popup_open = false;
+	hub.explanation_popup_hovered = false;
 
 	hub.looker.add_to_queue(hub.tree.node.board);		// Maybe make initial call to API such as ChessDN.cn...
 	Object.assign(hub, hub_props);
@@ -142,6 +150,10 @@ let hub_props = {
 
 		this.hoverdraw_div = -1;
 		this.position_change_time = performance.now();
+		this.explanation_selected_move = null;
+		this.explanation_preview_move = null;
+		this.explanation_preview_hold_until = 0;
+		this.hover_analysis.clear_all(true);
 		fenbox.value = this.tree.node.board.fen(true);
 
 		if (new_game_flag) {
@@ -493,6 +505,7 @@ let hub_props = {
 
 		this.draw_statusbox();
 		this.draw_infobox();
+		this.draw_explainbox();
 
 		this.grapher.draw(this.tree.node);
 	},
@@ -944,6 +957,119 @@ let hub_props = {
 			config.looker_api ? this.looker.lookup(config.looker_api, this.tree.node.board) : null);
 	},
 
+	draw_explainbox: function() {
+		let now = performance.now();
+		let preview_move = this.info_handler.hovered_info_move(this.tree.node);
+		if (!preview_move) {
+			preview_move = this.hovered_board_move();
+		}
+
+		if (preview_move) {
+			this.explanation_preview_move = preview_move;
+			this.explanation_preview_hold_until = now + this.explanation_preview_grace_ms();
+		} else if ((this.explanation_panel_hovered || this.explanation_popup_hovered || this.info_handler.explainbox_hovered()) && this.explanation_preview_move) {
+			preview_move = this.explanation_preview_move;
+			this.explanation_preview_hold_until = now + this.explanation_preview_grace_ms();
+		} else if (this.explanation_preview_move && now <= this.explanation_preview_hold_until) {
+			preview_move = this.explanation_preview_move;
+		} else {
+			this.explanation_preview_move = null;
+			this.explanation_preview_hold_until = 0;
+		}
+
+		let selected_move = preview_move || this.explanation_selected_move || null;
+		let info_list = (!this.tree.node || this.tree.node.destroyed || this.tree.node.terminal_reason()) ? [] : SortedMoveInfo(this.tree.node);
+		let selected_info = selected_move ? info_list.find(info => info.move === selected_move) : null;
+		let should_search = !!selected_move && (!selected_info || !selected_info.__touched);
+		let hover_state = this.hover_analysis.update(this.tree.node, selected_move, should_search);
+
+		this.info_handler.draw_explainbox(
+			this.tree.node,
+			this.explanation_selected_move,
+			preview_move,
+			hover_state);
+	},
+
+	sync_explanation_panel_visibility: function() {
+		rightgridder.classList.toggle("with-explainbox", !!config.show_explanation_panel);
+		rightgridder.classList.toggle("explainbox-expanded", !!config.show_explanation_panel && !!this.explanation_panel_expanded);
+		if (!config.show_explanation_panel && !this.explanation_popup_open) {
+			this.explanation_preview_move = null;
+			this.explanation_preview_hold_until = 0;
+			this.hover_analysis.clear_pending();
+		}
+		this.info_handler.must_draw_explainbox();
+	},
+
+	explanation_preview_grace_ms: function() {
+		return this.explanation_popup_open ? 1400 : 450;
+	},
+
+	set_explanation_panel_hovered: function(state) {
+		state = !!state;
+
+		if (this.explanation_panel_hovered === state) {
+			return;
+		}
+
+		this.explanation_panel_hovered = state;
+
+		if (state && this.explanation_preview_move) {
+			this.explanation_preview_hold_until = performance.now() + this.explanation_preview_grace_ms();
+		}
+
+		this.info_handler.must_draw_explainbox();
+		this.draw_explainbox();
+	},
+
+	set_explanation_popup_open: function(state) {
+		state = !!state;
+
+		if (this.explanation_popup_open === state) {
+			return;
+		}
+
+		this.explanation_popup_open = state;
+
+		if (!state) {
+			this.explanation_popup_hovered = false;
+		}
+
+		if (this.explanation_preview_move) {
+			this.explanation_preview_hold_until = performance.now() + this.explanation_preview_grace_ms();
+		}
+
+		this.info_handler.must_draw_explainbox();
+		this.draw();
+	},
+
+	set_explanation_popup_hovered: function(state) {
+		state = !!state;
+
+		if (this.explanation_popup_hovered === state) {
+			return;
+		}
+
+		this.explanation_popup_hovered = state;
+
+		if (state && this.explanation_preview_move) {
+			this.explanation_preview_hold_until = performance.now() + this.explanation_preview_grace_ms();
+		}
+
+		this.info_handler.must_draw_explainbox();
+		this.draw_explainbox();
+	},
+
+	toggle_explanation_panel_expanded: function() {
+		this.explanation_panel_expanded = !this.explanation_panel_expanded;
+		this.sync_explanation_panel_visibility();
+		this.draw();
+	},
+
+	show_explanation_popup: function() {
+		ipcRenderer.send("show_explanation_popup");
+	},
+
 	// ---------------------------------------------------------------------------------------------------------------------
 	// Fundamental engine methods... not to be called directly, except by behave() and handle_search_params_change()...
 
@@ -1025,38 +1151,61 @@ let hub_props = {
 		}
 	},
 
+	configure_engine_identity: function(target_engine, s, display_unknown_name) {
+
+		if (!target_engine) {
+			return;
+		}
+
+		target_engine.leelaish = false;
+
+		for (let name of config.leelaish_names) {
+			if (s.includes(name)) {
+				target_engine.leelaish = true;
+				break;
+			}
+		}
+
+		if (!engineconfig[target_engine.filepath]) {
+			engineconfig[target_engine.filepath] = engineconfig_io.newentry();
+		}
+
+		if (!target_engine.leelaish && !engineconfig[target_engine.filepath].options["MultiPV"]) {
+			engineconfig[target_engine.filepath].options["MultiPV"] = 3;
+			engineconfig[target_engine.filepath].search_nodes_special = 10000000;
+			if (target_engine === this.engine) {
+				this.send_ack_node_limit(true);
+			}
+		}
+
+		if (display_unknown_name && !s.includes("Lc0") && !s.includes("Ceres") && !s.includes("Stockfish")) {
+			this.info_handler.err_receive(s.slice("id name".length).trim());
+		}
+	},
+
+	apply_hover_engine_overrides: function(target_engine) {
+		if (!target_engine) {
+			return;
+		}
+
+		if (target_engine.known("MultiPV")) {
+			target_engine.setoption("MultiPV", 1);
+		}
+
+		if (target_engine.known("Threads")) {
+			target_engine.setoption("Threads", Math.max(1, Math.floor(config.hover_eval_threads || 1)));
+		}
+
+		if (target_engine.known("Hash")) {
+			target_engine.setoption("Hash", Math.max(1, Math.floor(config.hover_eval_hash_mb || 64)));
+		}
+	},
+
 	receive_misc: function(s) {
 
 		if (s.startsWith("id name")) {
 
-			// Note that we do need to set the leelaish flag on the engine here (rather than relying on the
-			// autodetection in info.js) so that correct options can be sent.
-
-			this.engine.leelaish = false;
-
-			for (let name of config.leelaish_names) {
-				if (s.includes(name)) {
-					this.engine.leelaish = true;
-					break;
-				}
-			}
-
-			// Our defaults in engineconfig_io.newentry() are appropriate for Leelaish engines.
-			// But if this is the first time we see an A/B engine, we must adjust them...
-
-			if (!this.engine.leelaish && !engineconfig[this.engine.filepath].options["MultiPV"]) {
-				// This likely indicates the engine is new to the config.
-				engineconfig[this.engine.filepath].options["MultiPV"] = 3;				// Will get ack'd when engine_send_all_options() happens
-				engineconfig[this.engine.filepath].search_nodes_special = 10000000;
-				this.send_ack_node_limit(true);
-			}
-
-			// Pass unknown engines to the error handler to be displayed...
-
-			if (!s.includes("Lc0") && !s.includes("Ceres") && !s.includes("Stockfish")) {
-				this.info_handler.err_receive(s.slice("id name".length).trim());
-			}
-
+			this.configure_engine_identity(this.engine, s, true);
 			return;
 		}
 
@@ -1276,6 +1425,8 @@ let hub_props = {
 	soft_engine_reset: function() {
 		this.set_behaviour("halt");					// Will cause "stop" to be sent.
 		this.engine.send_ucinewgame();				// Must happen after "stop" is sent.
+		this.hover_analysis.clear_all(true);
+		this.hover_analysis.engine.send_ucinewgame();
 	},
 
 	forget_analysis: function() {
@@ -1283,6 +1434,8 @@ let hub_props = {
 		this.tree.node.table.autopopulate(this.tree.node);
 		this.set_behaviour("halt");					// Will cause "stop" to be sent.
 		this.engine.send_ucinewgame();				// Must happen after "stop" is sent.
+		this.hover_analysis.clear_all(true);
+		this.hover_analysis.engine.send_ucinewgame();
 		this.engine.suppress_cycle_info = this.info_handler.engine_cycle;		// Ignore further info updates from this cycle.
 	},
 
@@ -1326,6 +1479,8 @@ let hub_props = {
 
 		this.set_behaviour("halt");
 		let sent = this.engine.setoption(name, val);							// Will ack the new value.
+		this.hover_analysis.clear_all(true);
+		this.hover_analysis.apply_main_option(name, val);
 		if (blue_text) {
 			this.set_special_message(sent, "blue");
 		}
@@ -1416,6 +1571,7 @@ let hub_props = {
 			console.log(`Creating new entry in engineconfig for ${filepath}`);
 		}
 
+		this.hover_analysis.start(filepath);
 		this.engine.send("uci");
 
 		this.send_ack_node_limit(false);			// Ack the node limits that are set in engineconfig[this.engine.filepath]
@@ -1429,27 +1585,31 @@ let hub_props = {
 		return true;
 	},
 
-	engine_send_all_options: function() {			// The engine should never have been given a "go" before this.
+	engine_send_all_options_to: function(target_engine, hover_mode = false) {			// The engine should never have been given a "go" before this.
+
+		if (!target_engine || !engineconfig[target_engine.filepath]) {
+			return;
+		}
 
 		// Options that are sent regardless of whether the engine seems to know about them...
 
-		let forced_engine_options = this.engine.leelaish ? forced_lc0_options : forced_ab_options;
+		let forced_engine_options = target_engine.leelaish ? forced_lc0_options : forced_ab_options;
 		for (let [key, value] of Object.entries(forced_engine_options)) {
-			this.engine.setoption(key, value);
+			target_engine.setoption(key, value);
 		}
 
 		// Standard options... only sent if the engine has said it knows them...
 
-		let standard_engine_options = this.engine.leelaish ? standard_lc0_options : standard_ab_options;
+		let standard_engine_options = target_engine.leelaish ? standard_lc0_options : standard_ab_options;
 		for (let [key, value] of Object.entries(standard_engine_options)) {
-			if (this.engine.known(key)) {
-				this.engine.setoption(key, value);
+			if (target_engine.known(key)) {
+				target_engine.setoption(key, value);
 			}
 		}
 
 		// Now send user-selected options. Thus, the user can override anything above.
 
-		let options = engineconfig[this.engine.filepath].options;
+		let options = engineconfig[target_engine.filepath].options;
 		let keys = Object.keys(options);
 
 		keys.sort((a, b) => {		// "It is recommended to set Hash after setting Threads."
@@ -1459,8 +1619,16 @@ let hub_props = {
 		});
 
 		for (let key of keys) {
-			this.engine.setoption(key, options[key]);
+			target_engine.setoption(key, options[key]);
 		}
+
+		if (hover_mode) {
+			this.apply_hover_engine_overrides(target_engine);
+		}
+	},
+
+	engine_send_all_options: function() {
+		this.engine_send_all_options_to(this.engine, false);
 	},
 
 	// ---------------------------------------------------------------------------------------------------------------------
@@ -1991,7 +2159,18 @@ let hub_props = {
 		let moves = this.info_handler.moves_from_click_n(n);
 
 		if (!moves || moves.length === 0) {				// We do assume length > 0 below.
-			this.maybe_searchmove_click(event);
+			if (this.maybe_searchmove_click(event)) {
+				return;
+			}
+
+			let line_n = EventPathN(event, "infoline_");
+			let line_move = this.info_handler.move_from_line_n(this.tree.node, line_n);
+
+			if (line_move) {
+				this.explanation_selected_move = line_move;
+				this.info_handler.must_draw_explainbox();
+				this.draw_explainbox();
+			}
 			return;
 		}
 
@@ -2024,7 +2203,7 @@ let hub_props = {
 
 		let sm = EventPathString(event, "searchmove_");
 		if (typeof sm !== "string" || (sm.length < 4 || sm.length > 5)) {
-			return;
+			return false;
 		}
 
 		if (this.tree.node.searchmoves.includes(sm)) {
@@ -2035,6 +2214,7 @@ let hub_props = {
 
 		this.tree.node.searchmoves.sort();
 		this.handle_search_params_change();
+		return true;
 	},
 
 	movelist_click: function(event) {
@@ -2169,6 +2349,42 @@ let hub_props = {
 		return null;
 	},
 
+	hovered_board_move: function() {
+		if (!this.tree.node || this.tree.node.destroyed) {
+			return null;
+		}
+
+		let board = this.tree.node.board;
+		let mouse_point = this.mouse_point();
+
+		if (!mouse_point) {
+			return null;
+		}
+
+		if (this.active_square) {
+			let move = this.active_square.s + mouse_point.s;
+
+			if (move.slice(0, 2) === move.slice(2, 4)) {
+				return null;
+			}
+
+			if (board.illegal(move) === "") {
+				return move;
+			}
+
+			for (let promo of ["q", "r", "b", "n"]) {
+				if (board.illegal(move + promo) === "") {
+					return move + promo;
+				}
+			}
+
+			return null;
+		}
+
+		let ocm = this.info_handler.one_click_moves[mouse_point.x][mouse_point.y];
+		return ocm || null;
+	},
+
 	// ---------------------------------------------------------------------------------------------------------------------
 	// Settings (but NOT including UCI options)...
 
@@ -2204,9 +2420,27 @@ let hub_props = {
 			this.tree.node.searchmoves = [];		// This is reasonable regardless of which way the toggle went.
 			this.handle_search_params_change();
 		}
+		if (option === "show_explanation_panel") {
+			this.sync_explanation_panel_visibility();
+		}
 
 		this.info_handler.must_draw_infobox();
 		this.draw();
+	},
+
+	explainbox_click: function(event) {
+		if (event.button === 2) {
+			return;
+		}
+
+		if (EventPathString(event, "explainbox_expand_clicker") !== null) {
+			this.toggle_explanation_panel_expanded();
+			return;
+		}
+
+		if (EventPathString(event, "explainbox_focus_clicker") !== null) {
+			this.show_explanation_popup();
+		}
 	},
 
 	toggle_flip: function() {						// config.flip should not be directly set, call this function instead.
@@ -2300,6 +2534,7 @@ let hub_props = {
 
 	set_info_font_size: function(n) {
 		infobox.style["font-size"] = n.toString() + "px";
+		explainbox.style["font-size"] = n.toString() + "px";
 		statusbox.style["font-size"] = n.toString() + "px";
 		fullbox.style["font-size"] = n.toString() + "px";
 		config.info_font_size = n;
@@ -2419,6 +2654,7 @@ let hub_props = {
 
 	quit: function() {
 		this.engine.shutdown();
+		this.hover_analysis.shutdown();
 		this.save_config();
 		this.save_engineconfig();
 		ipcRenderer.send("terminate");

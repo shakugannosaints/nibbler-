@@ -7,6 +7,7 @@ function NewInfoHandler() {
 	Object.assign(ih, info_receiver_props);
 	Object.assign(ih, arrow_props);
 	Object.assign(ih, infobox_props);
+	Object.assign(ih, explainbox_props);
 
 	// Array of possible one-click moves. Updated by draw_arrows(). Used elsewhere.
 	ih.one_click_moves = New2DArray(8, 8, null);
@@ -14,6 +15,8 @@ function NewInfoHandler() {
 	// Clickable elements in the infobox. Updated by draw_infobox(). Used elsewhere.
 	ih.info_clickers = [];
 	ih.info_clickers_node_id = null;
+	ih.info_line_moves = [];
+	ih.info_line_moves_node_id = null;
 
 	// Infobox stuff, used solely to skip redraws...
 	ih.last_drawn_node_id = null;
@@ -24,6 +27,8 @@ function NewInfoHandler() {
 	ih.last_drawn_searchmoves = [];
 	ih.last_drawn_allow_inactive_focus = null;
 	ih.last_drawn_lookup_object = null;
+	ih.last_drawn_explanation_signature = null;
+	ih.explanation_cache = new Map();
 
 	// Info about engine cycles. These aren't reset even when the engine resets.
 	ih.engine_cycle = 0;		// Count of "go" commands emitted. Since Engine can change, can't store this in Engine objects

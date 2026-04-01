@@ -1,0 +1,118 @@
+html,
+body {
+	background-color: #080808;
+	color: #d5d5d5;
+	font-family: consolas, "courier new", monospace;
+	height: 100%;
+	margin: 0;
+	padding: 0;
+}
+
+body {
+	overflow: hidden;
+}
+
+body::-webkit-scrollbar,
+#popup_root::-webkit-scrollbar {
+	width: 0.75em;
+}
+
+body::-webkit-scrollbar-track,
+#popup_root::-webkit-scrollbar-track {
+	background-color: #111111;
+}
+
+body::-webkit-scrollbar-thumb,
+#popup_root::-webkit-scrollbar-thumb {
+	background-color: #2a2a2a;
+	border-radius: 999px;
+}
+
+#popup_root {
+	box-sizing: border-box;
+	height: 100vh;
+	overflow-y: auto;
+	padding: 1em;
+}
+
+.blue {
+	color: #4ca3ff;
+}
+
+.gray {
+	color: #9a9a9a;
+}
+
+.white {
+	color: #f2f2f2;
+}
+
+.explainbox_card {
+	background-color: #101010;
+	border: 1px solid #1e1e1e;
+	border-radius: 10px;
+	box-sizing: border-box;
+	margin: 0 auto;
+	max-width: 1200px;
+	padding: 1em 1em 0.45em 1em;
+}
+
+.explainbox_topbar {
+	background-color: #101010;
+	border-bottom: 1px solid #1f1f1f;
+	margin: -1em -1em 0.85em -1em;
+	padding: 1em 1em 0.85em 1em;
+	position: sticky;
+	top: -1em;
+	z-index: 2;
+}
+
+.explainbox_header {
+	display: flex;
+	gap: 1em;
+	justify-content: space-between;
+	margin-bottom: 0.35em;
+}
+
+.explainbox_move {
+	font-size: 1.12em;
+	margin-bottom: 0.2em;
+}
+
+.explainbox_meta {
+	margin-bottom: 0.85em;
+}
+
+.explainbox_note {
+	line-height: 1.35;
+	margin-bottom: 0.75em;
+}
+
+.explainbox_summary {
+	line-height: 1.5;
+	margin: 0.85em 0 0.7em 0;
+}
+
+.explainbox_section {
+	background-color: #0d0d0d;
+	border: 1px solid #1e1e1e;
+	border-radius: 6px;
+	margin: 0 0 0.7em 0;
+	overflow: hidden;
+}
+
+.explainbox_section_summary {
+	background-color: #141414;
+	border-bottom: 1px solid #1e1e1e;
+	cursor: default;
+	padding: 0.55em 0.7em 0.3em 0.7em;
+}
+
+.explainbox_section_body {
+	padding: 0.55em 0.7em 0.15em 0.7em;
+}
+
+.explainbox_item {
+	line-height: 1.5;
+	margin-bottom: 0.42em;
+}
